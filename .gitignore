@@ -1,0 +1,25 @@
+# Raw and generated datasets
+data/raw/
+data/bronze/
+data/silver/
+data/gold/
+data/exports/
+
+# Model artefacts and MLflow
+mlruns/
+models/
+*.pkl
+*.joblib
+
+# Secrets
+.env
+.streamlit/secrets.toml
+kaggle.json
+
+# Python, Spark and logs
+__pycache__/
+.pytest_cache/
+.venv/
+spark-warehouse/
+logs/
+reports/
