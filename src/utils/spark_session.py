@@ -8,6 +8,8 @@ the JVM only starts when :func:`get_spark_session` is called.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from src.utils.config import ConfigLoader
@@ -17,6 +19,42 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from pyspark.sql import SparkSession
 
 _logger = get_logger("utils.spark_session")
+_WINDOWS_HADOOP_CANDIDATES = (Path("C:/hadoop"), Path("C:/tools/hadoop"))
+
+
+def _configure_windows_hadoop_home() -> Optional[Path]:
+    """Set Hadoop home on Windows when a local winutils.exe is available."""
+    if os.name != "nt":
+        return None
+
+    configured = [
+        Path(value)
+        for value in (
+            os.environ.get("HADOOP_HOME"),
+            os.environ.get("hadoop.home.dir"),
+        )
+        if value
+    ]
+
+    for hadoop_home in [*configured, *_WINDOWS_HADOOP_CANDIDATES]:
+        hadoop_bin = hadoop_home / "bin"
+        if (hadoop_bin / "winutils.exe").exists():
+            os.environ["HADOOP_HOME"] = str(hadoop_home)
+            os.environ["hadoop.home.dir"] = str(hadoop_home)
+            current_path = os.environ.get("PATH", "")
+            path_parts = [p for p in current_path.split(os.pathsep) if p]
+            if str(hadoop_bin) not in path_parts:
+                os.environ["PATH"] = os.pathsep.join(
+                    [str(hadoop_bin), *path_parts]
+                )
+            _logger.debug("Using Hadoop home for local Spark: {}", hadoop_home)
+            return hadoop_home
+
+    _logger.warning(
+        "HADOOP_HOME is unset and winutils.exe was not found; "
+        "local Spark startup may fail on Windows."
+    )
+    return None
 
 
 def get_spark_session(
@@ -39,6 +77,7 @@ def get_spark_session(
     from pyspark.sql import SparkSession
 
     app_name = app_name or config.get("spark.app_name", "CloudIQ")
+    hadoop_home = _configure_windows_hadoop_home()
 
     builder = (
         SparkSession.builder.appName(app_name)
@@ -63,6 +102,21 @@ def get_spark_session(
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
     )
+
+    if hadoop_home is not None:
+        hadoop_home_arg = hadoop_home.as_posix()
+        hadoop_bin_arg = (hadoop_home / "bin").as_posix()
+        java_options = (
+            f"-Dhadoop.home.dir={hadoop_home_arg} "
+            f"-Djava.library.path={hadoop_bin_arg}"
+        )
+        builder = builder.config(
+            "spark.driver.extraJavaOptions",
+            java_options,
+        ).config(
+            "spark.executor.extraJavaOptions",
+            java_options,
+        )
 
     spark = configure_spark_with_delta_pip(builder).getOrCreate()
     _logger.info(

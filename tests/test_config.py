@@ -31,8 +31,9 @@ def test_get_dot_notation(tmp_path: Path) -> None:
     assert loader.get("models.missing.key", "fallback") == "fallback"
 
 
-def test_default_interpolation(tmp_path: Path) -> None:
+def test_default_interpolation(tmp_path: Path, monkeypatch) -> None:
     """${VAR:-default} resolves to the default when the env var is unset."""
+    monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
     cfg = _write_config(
         tmp_path,
         """
@@ -42,6 +43,20 @@ def test_default_interpolation(tmp_path: Path) -> None:
     )
     loader = ConfigLoader(cfg, env_path="nonexistent.env")
     assert loader.get("mlflow.tracking_uri") == "mlruns"
+
+
+def test_embedded_default_interpolation(tmp_path: Path, monkeypatch) -> None:
+    """Placeholders embedded in larger strings resolve with defaults."""
+    monkeypatch.delenv("CLOUDIQ_TEST_ROOT", raising=False)
+    cfg = _write_config(
+        tmp_path,
+        """
+        paths:
+          smoke: "${CLOUDIQ_TEST_ROOT:-data}/_smoke_delta"
+        """,
+    )
+    loader = ConfigLoader(cfg, env_path="nonexistent.env")
+    assert loader.get("paths.smoke") == "data/_smoke_delta"
 
 
 def test_env_interpolation(tmp_path: Path, monkeypatch) -> None:

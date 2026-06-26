@@ -52,6 +52,13 @@ class _MockColumn:
         return self.value
 
 
+class _MockExpr:
+    """Minimal stand-in for a Spark column expression supporting alias()."""
+
+    def alias(self, name: str) -> str:
+        return name
+
+
 class _MockAgg:
     def __init__(self, value: datetime) -> None:
         self._value = value
@@ -75,7 +82,12 @@ def test_partial_final_month_excluded(monkeypatch) -> None:
     import src.processing.gold as gold
 
     # Patch F.max so derive_demand_cutoff_month does not require Spark.
-    monkeypatch.setattr(gold.F, "max", lambda _col: "m", raising=True)
+    monkeypatch.setattr(
+        gold.F,
+        "max",
+        lambda _col: _MockExpr(),
+        raising=True,
+    )
 
     orders = _MockOrders(datetime(2018, 10, 17, 12, 0, 0))
     cutoff = gold.derive_demand_cutoff_month(orders)
@@ -86,6 +98,11 @@ def test_cutoff_handles_january_rollover(monkeypatch) -> None:
     """A January max timestamp rolls the cutoff back to the prior December."""
     import src.processing.gold as gold
 
-    monkeypatch.setattr(gold.F, "max", lambda _col: "m", raising=True)
+    monkeypatch.setattr(
+        gold.F,
+        "max",
+        lambda _col: _MockExpr(),
+        raising=True,
+    )
     orders = _MockOrders(datetime(2018, 1, 9, 0, 0, 0))
     assert gold.derive_demand_cutoff_month(orders) == "2017-12"

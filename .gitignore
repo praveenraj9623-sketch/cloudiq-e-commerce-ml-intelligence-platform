@@ -1,4 +1,5 @@
 # Raw and generated datasets
+data/_smoke_delta/
 data/raw/
 data/bronze/
 data/silver/
@@ -19,7 +20,9 @@ kaggle.json
 # Python, Spark and logs
 __pycache__/
 .pytest_cache/
+.pytest_tmp/
 .venv/
 spark-warehouse/
 logs/
 reports/
+*.log

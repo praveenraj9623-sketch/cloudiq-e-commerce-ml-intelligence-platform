@@ -34,6 +34,7 @@ class SilverLayer:
         self.logger = get_logger("processing.silver")
         self.bronze_path = config.get_path("paths.bronze", create=False)
         self.silver_path = config.get_path("paths.silver")
+        self.last_order_items_filtered_rows = 0
 
     def _read_bronze(self, table: str) -> DataFrame:
         """Read a Bronze Delta table, dropping ingestion metadata columns."""
@@ -52,8 +53,19 @@ class SilverLayer:
     def clean_orders(self) -> DataFrame:
         """Clean orders and derive calendar and delivery fields."""
         df = self._read_bronze("orders")
+        has_delivery = F.col("order_delivered_customer_date").isNotNull()
+        has_purchase = F.col("order_purchase_timestamp").isNotNull()
+        has_estimated = F.col("order_estimated_delivery_date").isNotNull()
+        has_delivery_and_estimated = has_delivery & has_estimated
         df = (
             df.withColumn(
+                "order_approved_at",
+                F.coalesce(
+                    F.col("order_approved_at"),
+                    F.col("order_purchase_timestamp"),
+                ),
+            )
+            .withColumn(
                 "is_canceled",
                 F.when(F.col("order_status") == "canceled", 1).otherwise(0),
             )
@@ -65,53 +77,68 @@ class SilverLayer:
             )
             .withColumn(
                 "delivery_days",
-                F.datediff(
-                    "order_delivered_customer_date",
-                    "order_purchase_timestamp",
-                ),
+                F.when(
+                    has_delivery & has_purchase,
+                    F.datediff(
+                        "order_delivered_customer_date",
+                        "order_purchase_timestamp",
+                    ),
+                ).otherwise(F.lit(None).cast("int")),
             )
             .withColumn(
                 "is_late",
                 F.when(
-                    F.col("order_delivered_customer_date")
-                    > F.col("order_estimated_delivery_date"),
-                    1,
-                ).otherwise(0),
+                    has_delivery_and_estimated,
+                    F.when(
+                        F.col("order_delivered_customer_date")
+                        > F.col("order_estimated_delivery_date"),
+                        1,
+                    ).otherwise(0),
+                ).otherwise(F.lit(None).cast("int")),
             )
             .withColumn(
                 "delivery_delay_days",
                 F.when(
-                    F.col("is_late") == 1,
-                    F.datediff(
-                        "order_delivered_customer_date",
-                        "order_estimated_delivery_date",
-                    ),
-                ).otherwise(0),
-            )
-            .withColumn(
-                "order_approved_at",
-                F.coalesce(
-                    F.col("order_approved_at"),
-                    F.col("order_purchase_timestamp"),
-                ),
+                    has_delivery_and_estimated,
+                    F.when(
+                        F.col("order_delivered_customer_date")
+                        > F.col("order_estimated_delivery_date"),
+                        F.datediff(
+                            "order_delivered_customer_date",
+                            "order_estimated_delivery_date",
+                        ),
+                    ).otherwise(0),
+                ).otherwise(F.lit(None).cast("int")),
             )
         )
+        row_count = df.count()
+        unique_orders = df.select("order_id").distinct().count()
+        if row_count != unique_orders:
+            raise ValueError(
+                "silver/orders would not be one row per order_id: "
+                f"rows={row_count}, unique_order_id={unique_orders}"
+            )
         target = f"{self.silver_path}/orders"
         df.write.format("delta").mode("overwrite").partitionBy(
             "order_year_month"
         ).save(target)
-        self.logger.info("Wrote silver/orders")
+        self.logger.info(
+            "Wrote silver/orders rows={} unique_orders={}",
+            row_count,
+            unique_orders,
+        )
         return df
 
     def clean_order_items(self) -> DataFrame:
         """Clean order items and derive value and freight ratio fields."""
-        df = self._read_bronze("order_items")
+        source = self._read_bronze("order_items")
+        input_rows = source.count()
         df = (
-            df.withColumn(
+            source.filter(F.col("price") > 0)
+            .withColumn(
                 "total_item_value",
                 F.col("price") + F.col("freight_value"),
             )
-            .filter(F.col("price") > 0)
             .withColumn(
                 "freight_ratio",
                 F.when(
@@ -120,19 +147,31 @@ class SilverLayer:
                 ).otherwise(0.0),
             )
         )
+        output_rows = df.count()
+        self.last_order_items_filtered_rows = input_rows - output_rows
         df.write.format("delta").mode("overwrite").save(
             f"{self.silver_path}/order_items"
         )
-        self.logger.info("Wrote silver/order_items")
+        self.logger.info(
+            "Wrote silver/order_items rows={} filtered_non_positive_price={}",
+            output_rows,
+            self.last_order_items_filtered_rows,
+        )
         return df
 
     def build_master_orders(self) -> DataFrame:
         """Join orders with per-order aggregates without row fan-out."""
         base = self._read_silver("orders")
         input_rows = base.count()
+        input_unique_orders = base.select("order_id").distinct().count()
+        if input_rows != input_unique_orders:
+            raise ValueError(
+                "silver/orders is not unique by order_id: "
+                f"rows={input_rows}, unique_order_id={input_unique_orders}"
+            )
 
         items_agg = (
-            self._read_bronze("order_items")
+            self._read_silver("order_items")
             .groupBy("order_id")
             .agg(
                 F.sum("price").alias("order_revenue"),
@@ -140,14 +179,29 @@ class SilverLayer:
                 F.count("*").alias("item_count"),
             )
         )
-        pay_agg = (
-            self._read_bronze("payments")
-            .groupBy("order_id")
+        payments = self._read_bronze("payments")
+        payment_total = payments.groupBy("order_id").agg(
+            F.sum("payment_value").alias("payment_total")
+        )
+        payment_type_rank = Window.partitionBy("order_id").orderBy(
+            F.desc("_payment_type_value"),
+            F.asc("_first_payment_sequence"),
+            F.asc("payment_type"),
+        )
+        primary_payment = (
+            payments.groupBy("order_id", "payment_type")
             .agg(
-                F.sum("payment_value").alias("payment_total"),
-                F.first("payment_type").alias("primary_payment_type"),
+                F.sum("payment_value").alias("_payment_type_value"),
+                F.min("payment_sequential").alias("_first_payment_sequence"),
+            )
+            .withColumn("_payment_rank", F.row_number().over(payment_type_rank))
+            .filter(F.col("_payment_rank") == 1)
+            .select(
+                "order_id",
+                F.col("payment_type").alias("primary_payment_type"),
             )
         )
+        pay_agg = payment_total.join(primary_payment, "order_id", "left")
         rev_agg = (
             self._read_bronze("reviews")
             .groupBy("order_id")
@@ -184,21 +238,26 @@ class SilverLayer:
                 "freight_total",
                 "item_count",
                 "payment_total",
-                "avg_review_score",
                 "revenue_per_item",
-                "delivery_days",
-                "is_late",
-                "delivery_delay_days",
             ],
         ).fillna(
             "unknown",
             ["primary_payment_type", "customer_city", "customer_state"],
         )
-        master = master.dropDuplicates(["order_id"])
 
         output_rows = master.count()
+        output_unique_orders = master.select("order_id").distinct().count()
+        if output_rows != input_rows or output_unique_orders != input_rows:
+            raise ValueError(
+                "silver/master_orders must be one row per order_id: "
+                f"input={input_rows}, output={output_rows}, "
+                f"unique_order_id={output_unique_orders}"
+            )
         self.logger.info(
-            "master_orders input={} output={}", input_rows, output_rows
+            "master_orders input={} output={} unique_orders={}",
+            input_rows,
+            output_rows,
+            output_unique_orders,
         )
         master.write.format("delta").mode("overwrite").partitionBy(
             "order_year_month"
@@ -206,8 +265,34 @@ class SilverLayer:
         return master
 
     def build_customer_profile(self) -> DataFrame:
-        """Aggregate master orders into a per-customer profile."""
+        """Aggregate master orders into one profile per customer.
+
+        ``recency_days`` is calculated against the historical dataset reference
+        date 2018-10-17, not the current wall-clock date.
+        """
         master = self._read_silver("master_orders")
+        payment_pref_win = Window.partitionBy("customer_unique_id").orderBy(
+            F.desc("_payment_order_count"),
+            F.desc("_payment_value"),
+            F.asc("primary_payment_type"),
+        )
+        preferred_payment = (
+            master.filter(
+                F.col("customer_unique_id").isNotNull()
+                & F.col("primary_payment_type").isNotNull()
+            )
+            .groupBy("customer_unique_id", "primary_payment_type")
+            .agg(
+                F.countDistinct("order_id").alias("_payment_order_count"),
+                F.sum("payment_total").alias("_payment_value"),
+            )
+            .withColumn("_payment_rank", F.row_number().over(payment_pref_win))
+            .filter(F.col("_payment_rank") == 1)
+            .select(
+                "customer_unique_id",
+                F.col("primary_payment_type").alias("preferred_payment"),
+            )
+        )
         profile = master.groupBy("customer_unique_id").agg(
             F.min("order_purchase_timestamp").alias("first_purchase"),
             F.max("order_purchase_timestamp").alias("last_purchase"),
@@ -223,8 +308,11 @@ class SilverLayer:
                 F.max("order_purchase_timestamp"),
                 F.min("order_purchase_timestamp"),
             ).alias("customer_age_days"),
-            F.first("primary_payment_type").alias("preferred_payment"),
-            F.first("customer_state").alias("customer_state"),
+            F.min("customer_state").alias("customer_state"),
+        )
+        profile = (
+            profile.join(preferred_payment, "customer_unique_id", "left")
+            .fillna("unknown", ["preferred_payment", "customer_state"])
         )
         profile.write.format("delta").mode("overwrite").save(
             f"{self.silver_path}/customer_profile"
@@ -233,10 +321,22 @@ class SilverLayer:
         return profile
 
     def build_product_demand(self) -> DataFrame:
-        """Build monthly product demand by English category name."""
-        items = self._read_bronze("order_items")
-        orders = self._read_silver("orders").select(
-            "order_id", "order_year_month"
+        """Build fulfilled monthly product demand by category.
+
+        Demand is limited to delivered orders with non-null purchase timestamps
+        because this table represents fulfilled demand, not placed demand.
+        Category translation is optional: untranslated Portuguese categories
+        are preserved as ``untranslated__<category>`` and null source
+        categories become ``unknown``.
+        """
+        items = self._read_silver("order_items")
+        orders = (
+            self._read_silver("orders")
+            .filter(
+                (F.col("order_status") == "delivered")
+                & F.col("order_purchase_timestamp").isNotNull()
+            )
+            .select("order_id", "order_year_month")
         )
         products = self._read_bronze("products").select(
             "product_id", "product_category_name"
@@ -249,11 +349,18 @@ class SilverLayer:
             .join(translation, "product_category_name", "left")
             .withColumn(
                 "category_name_english",
-                F.coalesce(
+                F.when(
+                    F.col("product_category_name_english").isNotNull(),
                     F.col("product_category_name_english"),
-                    F.col("product_category_name"),
-                    F.lit("unknown"),
-                ),
+                )
+                .when(
+                    F.col("product_category_name").isNotNull(),
+                    F.concat(
+                        F.lit("untranslated__"),
+                        F.col("product_category_name"),
+                    ),
+                )
+                .otherwise(F.lit("unknown")),
             )
         )
         demand = joined.groupBy(
@@ -292,7 +399,7 @@ class SilverLayer:
         ``order_id`` mapping so each order contributes one value per seller
         regardless of item count.
         """
-        items = self._read_bronze("order_items")
+        items = self._read_silver("order_items")
         sellers = self._read_bronze("sellers").select(
             "seller_id", "seller_state"
         )
@@ -301,10 +408,10 @@ class SilverLayer:
         # Correction 3: revenue and distinct order count from order_items.
         seller_agg = items.groupBy("seller_id").agg(
             F.countDistinct("order_id").alias("total_orders"),
-            F.sum("price").alias("total_revenue_excl_freight"),
+            F.sum("price").alias("total_product_revenue"),
             F.sum("freight_value").alias("total_freight"),
             F.sum(F.col("price") + F.col("freight_value")).alias(
-                "total_revenue_incl_freight"
+                "total_revenue"
             ),
         )
 
@@ -329,20 +436,22 @@ class SilverLayer:
                 F.coalesce(F.col("seller_state"), F.lit("unknown")),
             )
             .withColumn(
-                # Tier uses product revenue only (excl. freight) per C3.
+                # Tier uses the seller-level total revenue computed above.
                 "performance_tier",
                 F.when(
-                    F.col("total_revenue_excl_freight") > 10000, "high"
+                    F.col("total_revenue") > 10000, "high"
                 )
                 .when(
-                    F.col("total_revenue_excl_freight") >= 1000, "medium"
+                    F.col("total_revenue") >= 1000, "medium"
                 )
                 .otherwise("low"),
             )
         )
-        perf.write.format("delta").mode("overwrite").partitionBy(
-            "seller_state"
-        ).save(f"{self.silver_path}/seller_performance")
+        perf.write.format("delta").mode("overwrite").option(
+            "overwriteSchema", "true"
+        ).partitionBy("seller_state").save(
+            f"{self.silver_path}/seller_performance"
+        )
         self.logger.info("Wrote silver/seller_performance")
         return perf
 

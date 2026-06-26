@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Optional
 from uuid import uuid4
 
 from pyspark.sql import DataFrame, functions as F
-from pyspark.sql.types import DoubleType, IntegerType, TimestampType
+from pyspark.sql.types import DoubleType, IntegerType
 
 from src.utils.config import ConfigLoader
 from src.utils.logger import get_logger
@@ -158,7 +158,17 @@ class BronzeLayer:
 
     def ingest_reviews(self) -> dict:
         """Ingest reviews, casting score and timestamp columns."""
-        df = self._read_csv("reviews")
+        path = self._csv_path("reviews")
+        self.logger.info("Reading raw reviews CSV: {}", path)
+        df = (
+            self.spark.read.option("header", "true")
+            .option("inferSchema", "true")
+            .option("multiLine", "true")
+            .option("quote", '"')
+            .option("escape", '"')
+            .option("mode", "FAILFAST")
+            .csv(str(path))
+        )
         df = (
             df.withColumn(
                 "review_score", F.col("review_score").cast(IntegerType())

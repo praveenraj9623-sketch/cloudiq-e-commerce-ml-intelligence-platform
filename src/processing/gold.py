@@ -1,26 +1,17 @@
 """Gold feature engineering layer for CloudIQ.
 
-Produces churn snapshot features, demand history and lag features, canonical
-RFM segments, and BI revenue. The architecture corrections are authoritative:
+Builds leakage-safe Gold tables:
 
-- Churn (C1): sourced from ``silver/master_orders`` only, using temporal
-  snapshots. Eligible customers have a delivered order with
-  ``order_delivered_customer_date <= T``. All features are snapshot-time
-  knowable; the label is derived from delivered orders in ``(T, T+90d]``.
-  ``recency_days`` and ``log_recency`` are excluded.
-- Demand (C16/C18): training cutoff derived from
-  ``max(order_purchase_timestamp)`` resolves to 2018-09; October 2018 is
-  excluded. A continuous monthly grid per category from its first observed
-  month through 2018-09 is zero-filled. ``rolling_mean_3`` uses
-  ``rowsBetween(-3, -1)`` (prior months only). ``gold/demand_history`` is the
-  full series; ``gold/demand_features`` is the lag table after dropping rows
-  with insufficient history.
-- Segmentation (C5/C14): rule-based ``segment_label`` is canonical; no KMeans
-  output is produced in this phase.
+- ``demand_features`` predicts next month's unit demand from prior-month lags.
+- ``churn_features`` is a snapshot training table whose features use only data
+  known at or before each snapshot date.
+- ``rfm_segments`` applies directionally correct RFM scoring.
+- ``bi_revenue`` exposes revenue and late-delivery metrics for reporting.
 """
 
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta
 import time
 from typing import TYPE_CHECKING
 
@@ -33,16 +24,7 @@ from src.utils.logger import get_logger
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pyspark.sql import SparkSession
 
-# Demand history, features, training, and evaluation all end here (C16).
-_DEMAND_END_MONTH = "2018-09"
-# Churn snapshot window: first day of each month, 2017-01 .. 2018-07 (C1).
-_CHURN_SNAPSHOTS = [
-    f"{year}-{month:02d}-01"
-    for year in (2017, 2018)
-    for month in range(1, 13)
-    if not (year == 2017 and month == 0)
-    if (year, month) <= (2018, 7)
-]
+_CHURN_PRIOR_HISTORY_DAYS = 90
 _CHURN_HORIZON_DAYS = 90
 
 
@@ -72,6 +54,46 @@ def derive_demand_cutoff_month(orders: DataFrame) -> str:
     return f"{cutoff_year}-{cutoff_month:02d}"
 
 
+def _as_date(value: date | datetime) -> date:
+    """Return a ``date`` for a date or datetime value."""
+    if isinstance(value, datetime):
+        return value.date()
+    return value
+
+
+def _first_month_start_on_or_after(value: date) -> date:
+    """Return the first day of the current or next month on/after ``value``."""
+    if value.day == 1:
+        return value
+    if value.month == 12:
+        return date(value.year + 1, 1, 1)
+    return date(value.year, value.month + 1, 1)
+
+
+def _next_month_start(value: date) -> date:
+    """Return the first day of the month after ``value``."""
+    if value.month == 12:
+        return date(value.year + 1, 1, 1)
+    return date(value.year, value.month + 1, 1)
+
+
+def derive_churn_snapshot_dates(
+    min_purchase_ts: date | datetime,
+    max_purchase_ts: date | datetime,
+    prior_history_days: int = _CHURN_PRIOR_HISTORY_DAYS,
+    horizon_days: int = _CHURN_HORIZON_DAYS,
+) -> list[str]:
+    """Derive monthly churn snapshot dates with prior and future coverage."""
+    first_allowed = _as_date(min_purchase_ts) + timedelta(days=prior_history_days)
+    last_allowed = _as_date(max_purchase_ts) - timedelta(days=horizon_days)
+    current = _first_month_start_on_or_after(first_allowed)
+    snapshots: list[str] = []
+    while current <= last_allowed:
+        snapshots.append(current.isoformat())
+        current = _next_month_start(current)
+    return snapshots
+
+
 class GoldLayer:
     """Build Gold feature tables from Silver Delta tables."""
 
@@ -96,222 +118,225 @@ class GoldLayer:
         return df.drop(*meta) if meta else df
 
     def build_churn_features(self) -> DataFrame:
-        """Build temporal churn snapshot features (Correction 1).
+        """Build a leakage-safe snapshot churn training table.
 
-        Each ``(customer_unique_id, snapshot_month)`` is one row. All features
-        use only delivered-by-T information; the label uses delivered orders in
-        the 90-day window after T. ``recency_days`` and ``log_recency`` are
-        never produced.
+        Features are derived from completed, non-cancelled purchases on or
+        before ``snapshot_date``. The label is whether the customer has no
+        completed purchase in the following 90 days.
         """
         master = self._read_silver("master_orders")
         reviews = self._read_bronze("reviews").select(
             "order_id", "review_score", "review_creation_date"
         )
-        master = master.join(
-            reviews.groupBy("order_id").agg(
-                F.min("review_creation_date").alias("review_creation_date")
-            ),
-            "order_id",
-            "left",
-        )
+        completed = self._completed_churn_orders(master)
+        bounds = completed.agg(
+            F.min("order_purchase_timestamp").alias("min_purchase"),
+            F.max("order_purchase_timestamp").alias("max_purchase"),
+        ).first()
+        if bounds["min_purchase"] is None or bounds["max_purchase"] is None:
+            raise ValueError("Cannot build churn features without purchases")
 
-        delivered = master.filter(
+        snapshot_dates = derive_churn_snapshot_dates(
+            bounds["min_purchase"],
+            bounds["max_purchase"],
+        )
+        if not snapshot_dates:
+            raise ValueError("No churn snapshots have sufficient date coverage")
+
+        churn = self._build_churn_for_snapshots(completed, reviews, snapshot_dates)
+        churn.write.format("delta").mode("overwrite").option(
+            "overwriteSchema", "true"
+        ).partitionBy("snapshot_date").save(f"{self.gold_path}/churn_features")
+
+        written = self.spark.read.format("delta").load(
+            f"{self.gold_path}/churn_features"
+        )
+        row_count = written.count()
+        unique_customers = written.select("customer_unique_id").distinct().count()
+        summary = written.agg(
+            F.min("snapshot_date").alias("min_snapshot"),
+            F.max("snapshot_date").alias("max_snapshot"),
+            F.avg("is_churned").alias("churn_rate"),
+        ).first()
+        self.logger.info(
+            "Wrote gold/churn_features snapshots={} rows={} "
+            "unique_customers={} churn_rate={} range={}..{}",
+            len(snapshot_dates),
+            row_count,
+            unique_customers,
+            round(float(summary["churn_rate"]), 4),
+            summary["min_snapshot"],
+            summary["max_snapshot"],
+        )
+        return written
+
+    def _completed_churn_orders(self, master: DataFrame) -> DataFrame:
+        """Return completed, non-cancelled orders eligible for churn features."""
+        return master.filter(
             (F.col("order_status") == "delivered")
-            & F.col("order_delivered_customer_date").isNotNull()
+            & F.col("order_purchase_timestamp").isNotNull()
+            & F.col("customer_unique_id").isNotNull()
         )
 
-        snapshots: list[DataFrame] = []
-        for snap in _CHURN_SNAPSHOTS:
-            t = F.to_date(F.lit(snap))
-            snapshot_month = snap[:7]
+    def _build_churn_for_snapshots(
+        self,
+        completed_orders: DataFrame,
+        reviews: DataFrame,
+        snapshot_dates: list[str],
+    ) -> DataFrame:
+        """Build churn rows for explicit snapshot dates."""
+        snapshots = self.spark.createDataFrame(
+            [(snapshot,) for snapshot in snapshot_dates],
+            ["snapshot_date"],
+        ).withColumn("snapshot_date", F.to_date("snapshot_date"))
+        orders = completed_orders.withColumn(
+            "_purchase_date",
+            F.to_date("order_purchase_timestamp"),
+        ).select(
+            "order_id",
+            "customer_unique_id",
+            "order_purchase_timestamp",
+            "_purchase_date",
+            "order_revenue",
+            "order_delivered_customer_date",
+            "is_late",
+        )
 
-            # Orders delivered to the customer at or before T.
-            past = delivered.filter(
-                F.to_date(F.col("order_delivered_customer_date")) <= t
-            )
-            features = past.groupBy("customer_unique_id").agg(
-                F.countDistinct("order_id").alias("total_orders_at_T"),
-                F.sum("order_revenue").alias("total_revenue_at_T"),
-                F.avg("order_revenue").alias("avg_order_value_at_T"),
-                F.avg("is_late").alias("late_delivery_rate_at_T"),
-                F.datediff(
-                    t, F.max("order_delivered_customer_date")
-                ).alias("days_since_last_order_at_T"),
-                F.datediff(
-                    t, F.min("order_delivered_customer_date")
-                ).alias("customer_age_days_at_T"),
-            )
+        past = orders.crossJoin(snapshots).filter(
+            F.col("_purchase_date") <= F.col("snapshot_date")
+        )
+        features = past.groupBy("snapshot_date", "customer_unique_id").agg(
+            F.countDistinct("order_id").alias("total_orders"),
+            F.sum("order_revenue").alias("total_revenue"),
+            F.avg("order_revenue").alias("avg_order_value"),
+            F.min("order_purchase_timestamp").alias("first_purchase_timestamp"),
+            F.max("order_purchase_timestamp").alias("last_purchase_timestamp"),
+            F.datediff(
+                F.col("snapshot_date"),
+                F.max("order_purchase_timestamp"),
+            ).alias("recency_days"),
+            F.datediff(
+                F.max("order_purchase_timestamp"),
+                F.min("order_purchase_timestamp"),
+            ).alias("customer_age_days"),
+        )
 
-            # Review features: only reviews created at or before T.
-            review_feat = (
-                past.filter(
-                    F.to_date(F.col("review_creation_date")) <= t
-                )
-                .groupBy("customer_unique_id")
-                .agg(
-                    F.avg("avg_review_score").alias("avg_review_score_at_T")
-                )
+        review_features = (
+            past.select("snapshot_date", "order_id", "customer_unique_id")
+            .join(reviews, "order_id", "left")
+            .filter(
+                F.col("review_creation_date").isNull()
+                | (F.to_date("review_creation_date") <= F.col("snapshot_date"))
             )
-
-            # Future delivered orders in (T, T+90d] determine the label.
-            future = (
-                delivered.filter(
-                    (
-                        F.to_date(F.col("order_delivered_customer_date"))
-                        > t
-                    )
-                    & (
-                        F.to_date(F.col("order_delivered_customer_date"))
-                        <= F.date_add(t, _CHURN_HORIZON_DAYS)
-                    )
-                )
-                .select("customer_unique_id")
-                .distinct()
-                .withColumn("_repeat", F.lit(1))
+            .groupBy("snapshot_date", "customer_unique_id")
+            .agg(
+                F.avg(F.col("review_score").cast("double")).alias(
+                    "avg_review_score"
+                ),
+                F.max("review_creation_date").alias("last_review_creation_date"),
             )
+        )
 
-            snap_df = (
-                features.join(review_feat, "customer_unique_id", "left")
-                .join(future, "customer_unique_id", "left")
-                .withColumn("snapshot_month", F.lit(snapshot_month))
-                .withColumn(
-                    "is_churned",
-                    F.when(F.col("_repeat").isNull(), 1).otherwise(0),
-                )
-                .drop("_repeat")
+        delivery_features = (
+            past.filter(
+                F.to_date("order_delivered_customer_date")
+                <= F.col("snapshot_date")
             )
-            snapshots.append(snap_df)
+            .groupBy("snapshot_date", "customer_unique_id")
+            .agg(
+                F.avg("is_late").alias("late_delivery_rate"),
+                F.max("order_delivered_customer_date").alias(
+                    "last_delivery_date"
+                ),
+            )
+        )
 
-        churn = snapshots[0]
-        for extra in snapshots[1:]:
-            churn = churn.unionByName(extra)
+        future = (
+            orders.crossJoin(snapshots)
+            .filter(F.col("_purchase_date") > F.col("snapshot_date"))
+            .filter(
+                F.col("_purchase_date")
+                <= F.date_add(F.col("snapshot_date"), _CHURN_HORIZON_DAYS)
+            )
+            .select("snapshot_date", "customer_unique_id")
+            .distinct()
+            .withColumn("_has_future_purchase", F.lit(1))
+        )
 
         churn = (
-            churn.withColumn(
-                "purchase_frequency_score_at_T",
-                F.col("total_orders_at_T")
-                / (F.col("customer_age_days_at_T") + F.lit(1))
+            features.join(
+                review_features,
+                ["snapshot_date", "customer_unique_id"],
+                "left",
+            )
+            .join(
+                delivery_features,
+                ["snapshot_date", "customer_unique_id"],
+                "left",
+            )
+            .join(future, ["snapshot_date", "customer_unique_id"], "left")
+            .withColumn(
+                "is_churned",
+                F.when(F.col("_has_future_purchase").isNull(), 1).otherwise(0),
+            )
+            .drop("_has_future_purchase")
+            .fillna(0, ["avg_review_score", "late_delivery_rate"])
+            .withColumn(
+                "purchase_frequency_30d",
+                F.col("total_orders")
+                / (F.col("customer_age_days") + F.lit(1))
                 * F.lit(30),
             )
+            .withColumn("log_recency", F.log1p(F.col("recency_days")))
+            .withColumn("log_total_revenue", F.log1p(F.col("total_revenue")))
             .withColumn(
-                "revenue_per_order_norm_at_T",
-                F.col("total_revenue_at_T")
-                / (F.col("total_orders_at_T") + F.lit(1)),
-            )
-            .withColumn(
-                "high_late_delivery_flag_at_T",
-                F.when(
-                    F.col("late_delivery_rate_at_T") > 0.3, 1
-                ).otherwise(0),
+                "revenue_per_order",
+                F.col("total_revenue") / F.col("total_orders"),
             )
         )
-        numeric = [
-            "total_orders_at_T",
-            "total_revenue_at_T",
-            "avg_order_value_at_T",
-            "avg_review_score_at_T",
-            "late_delivery_rate_at_T",
-            "purchase_frequency_score_at_T",
-            "revenue_per_order_norm_at_T",
-            "high_late_delivery_flag_at_T",
-            "days_since_last_order_at_T",
-            "customer_age_days_at_T",
-        ]
-        churn = churn.fillna(0, numeric)
-        churn.write.format("delta").mode("overwrite").partitionBy(
-            "snapshot_month"
-        ).save(f"{self.gold_path}/churn_features")
-        self.logger.info("Wrote gold/churn_features")
         return churn
 
-    def _build_demand_history(self) -> DataFrame:
-        """Build the continuous zero-filled monthly grid per category (C16)."""
-        orders = self._read_silver("orders")
-        cutoff = derive_demand_cutoff_month(orders)
-        self.logger.info("Demand training cutoff month: {}", cutoff)
-
-        demand = self._read_silver("product_demand").filter(
-            F.col("order_year_month") <= cutoff
-        )
-        base = demand.select(
+    def build_demand_history(self) -> DataFrame:
+        """Write observed monthly demand history for compatibility."""
+        history = self._read_silver("product_demand").select(
             "category_name_english",
             "order_year_month",
             "monthly_units",
             "monthly_revenue",
             "avg_price",
         )
-
-        # First observed month per category and a month index helper.
-        first_month = base.groupBy("category_name_english").agg(
-            F.min("order_year_month").alias("first_month")
+        history.write.format("delta").mode("overwrite").option(
+            "overwriteSchema", "true"
+        ).partitionBy("category_name_english").save(
+            f"{self.gold_path}/demand_history"
         )
-
-        def _month_index(col: "F.Column") -> "F.Column":
-            year = F.substring(col, 1, 4).cast("int")
-            month = F.substring(col, 6, 2).cast("int")
-            return year * F.lit(12) + month
-
-        cutoff_idx = (
-            int(cutoff[:4]) * 12 + int(cutoff[5:7])
-        )
-        first_month = first_month.withColumn(
-            "first_idx", _month_index(F.col("first_month"))
-        )
-        # Generate the continuous index range [first_idx, cutoff_idx].
-        grid = first_month.withColumn(
-            "idx",
-            F.explode(
-                F.sequence(F.col("first_idx"), F.lit(cutoff_idx))
-            ),
-        )
-        grid = grid.withColumn(
-            "order_year_month",
-            F.concat_ws(
-                "-",
-                F.format_string(
-                    "%04d", ((F.col("idx") - 1) / F.lit(12)).cast("int")
-                ),
-                F.format_string(
-                    "%02d",
-                    (((F.col("idx") - 1) % F.lit(12)) + 1).cast("int"),
-                ),
-            ),
-        ).select("category_name_english", "order_year_month")
-
-        history = (
-            grid.join(
-                base,
-                ["category_name_english", "order_year_month"],
-                "left",
-            )
-            .fillna(0, ["monthly_units", "monthly_revenue", "avg_price"])
-        )
-        return history
-
-    def build_demand_history(self) -> DataFrame:
-        """Write ``gold/demand_history`` (full continuous series, C16/C18)."""
-        history = self._build_demand_history()
-        history.write.format("delta").mode("overwrite").partitionBy(
-            "category_name_english"
-        ).save(f"{self.gold_path}/demand_history")
         self.logger.info("Wrote gold/demand_history")
         return history
 
     def build_demand_forecast_features(self) -> DataFrame:
-        """Build ``gold/demand_features`` lag table (Correction 16).
+        """Build next-month demand forecasting features.
 
-        Lags and ``rolling_mean_3`` are computed over the continuous monthly
-        grid. ``rolling_mean_3`` uses ``rowsBetween(-3, -1)`` so the current
-        month's value is never included. Rows lacking ``lag_4`` history are
-        dropped, leaving fewer rows than ``demand_history``.
+        ``target_next_month`` is the next row's observed ``monthly_units`` for
+        each category. All lag and rolling features use prior rows only; the
+        current month's observed demand is never included in ``rolling_mean_3``.
         """
-        history = self._build_demand_history()
+        demand = self._read_silver("product_demand").select(
+            "category_name_english",
+            "order_year_month",
+            "monthly_units",
+            "monthly_revenue",
+            "avg_price",
+        )
         win = Window.partitionBy("category_name_english").orderBy(
             "order_year_month"
         )
         roll_win = win.rowsBetween(-3, -1)
         features = (
-            history.withColumn("lag_1", F.lag("monthly_units", 1).over(win))
+            demand.withColumn(
+                "target_next_month",
+                F.lead("monthly_units", 1).over(win),
+            )
+            .withColumn("lag_1", F.lag("monthly_units", 1).over(win))
             .withColumn("lag_2", F.lag("monthly_units", 2).over(win))
             .withColumn("lag_4", F.lag("monthly_units", 4).over(win))
             .withColumn(
@@ -327,15 +352,18 @@ class GoldLayer:
                 F.when(F.col("month_num") >= 10, 1).otherwise(0),
             )
             .filter(F.col("lag_4").isNotNull())
+            .filter(F.col("target_next_month").isNotNull())
         )
-        features.write.format("delta").mode("overwrite").partitionBy(
-            "category_name_english"
-        ).save(f"{self.gold_path}/demand_features")
+        features.write.format("delta").mode("overwrite").option(
+            "overwriteSchema", "true"
+        ).partitionBy("category_name_english").save(
+            f"{self.gold_path}/demand_features"
+        )
         self.logger.info("Wrote gold/demand_features")
         return features
 
     def build_rfm_segments(self) -> DataFrame:
-        """Build canonical rule-based RFM segments (Corrections 5 and 14)."""
+        """Build canonical rule-based RFM segments with correct directions."""
         profile = self._read_silver("customer_profile")
         rec_win = Window.orderBy(F.col("recency_days").desc())
         freq_win = Window.orderBy(F.col("total_orders").asc())
@@ -360,10 +388,16 @@ class GoldLayer:
             .when(F.col("rfm_total") >= 4, "At Risk")
             .otherwise("Lost"),
         )
-        rfm.write.format("delta").mode("overwrite").save(
+        rfm.write.format("delta").mode("overwrite").option(
+            "overwriteSchema", "true"
+        ).save(
             f"{self.gold_path}/rfm_segments"
         )
-        self.logger.info("Wrote gold/rfm_segments")
+        distribution = {
+            row["segment_label"]: row["count"]
+            for row in rfm.groupBy("segment_label").count().collect()
+        }
+        self.logger.info("Wrote gold/rfm_segments distribution={}", distribution)
         return rfm
 
     def build_bi_revenue(self) -> DataFrame:
@@ -379,21 +413,20 @@ class GoldLayer:
             F.count("order_id").alias("total_orders"),
             F.sum("order_revenue").alias("total_revenue"),
             F.avg("order_revenue").alias("avg_order_value"),
-            F.avg("is_late").alias("return_rate"),
+            F.avg("is_late").alias("late_delivery_rate"),
         )
-        bi.write.format("delta").mode("overwrite").partitionBy(
-            "order_year"
-        ).save(f"{self.gold_path}/bi_revenue")
+        bi.write.format("delta").mode("overwrite").option(
+            "overwriteSchema", "true"
+        ).partitionBy("order_year").save(f"{self.gold_path}/bi_revenue")
         self.logger.info("Wrote gold/bi_revenue")
         return bi
 
     def run_pipeline(self) -> dict:
-        """Run all Gold build steps in order."""
+        """Run independent Gold build steps and return structured results."""
         start = time.time()
         steps = [
-            ("churn_features", self.build_churn_features),
-            ("demand_history", self.build_demand_history),
             ("demand_features", self.build_demand_forecast_features),
+            ("churn_features", self.build_churn_features),
             ("rfm_segments", self.build_rfm_segments),
             ("bi_revenue", self.build_bi_revenue),
         ]
