@@ -1,0 +1,78 @@
+project:
+  name: "CloudIQ"
+  version: "1.0.0"
+  environment: "local"
+
+azure:
+  storage_account: "${AZURE_STORAGE_ACCOUNT}"
+  storage_key: "${AZURE_STORAGE_KEY}"
+  connection_string: "${AZURE_STORAGE_CONNECTION_STRING}"
+  containers:
+    raw: "cloudiq-raw"
+    bronze: "cloudiq-bronze"
+    silver: "cloudiq-silver"
+    gold: "cloudiq-gold"
+  databricks:
+    host: "${DATABRICKS_HOST}"
+    token: "${DATABRICKS_TOKEN}"
+    cluster_id: "${DATABRICKS_CLUSTER_ID}"
+  adf_factory_name: "${ADF_FACTORY_NAME}"
+
+spark:
+  app_name: "CloudIQ-Pipeline"
+  driver_memory: "4g"
+  executor_memory: "4g"
+  shuffle_partitions: 8
+
+mlflow:
+  tracking_uri: "${MLFLOW_TRACKING_URI:-mlruns}"
+  experiment_name: "cloudiq_ecommerce"
+
+models:
+  demand_forecast:
+    # Corrected per docs/architecture_corrections.md C2: weekly_orders does not
+    # exist in the pipeline; the Silver/Gold layers produce monthly_units.
+    target: "monthly_units"
+    horizon: 4
+    xgb_params:
+      n_estimators: 300
+      max_depth: 6
+      learning_rate: 0.05
+      subsample: 0.8
+      colsample_bytree: 0.8
+    lag_features: [1, 2, 4, 8]
+  churn:
+    churn_days_threshold: 90
+    target: "is_churned"
+    xgb_params:
+      n_estimators: 200
+      max_depth: 5
+      learning_rate: 0.1
+      scale_pos_weight: 3
+  segmentation:
+    n_clusters: 5
+    random_state: 42
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+
+paths:
+  raw: "data/raw"
+  bronze: "data/bronze"
+  silver: "data/silver"
+  gold: "data/gold"
+  models: "models"
+  reports: "reports"
+  logs: "logs"
+
+olist_files:
+  orders: "olist_orders_dataset.csv"
+  customers: "olist_customers_dataset.csv"
+  order_items: "olist_order_items_dataset.csv"
+  products: "olist_products_dataset.csv"
+  reviews: "olist_order_reviews_dataset.csv"
+  payments: "olist_order_payments_dataset.csv"
+  sellers: "olist_sellers_dataset.csv"
+  geolocation: "olist_geolocation_dataset.csv"
+  category_translation: "product_category_name_translation.csv"
