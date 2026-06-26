@@ -5,6 +5,7 @@ data/bronze/
 data/silver/
 data/gold/
 data/exports/
+data/dashboard/
 
 # Model artefacts and MLflow
 mlruns/

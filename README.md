@@ -76,6 +76,29 @@ pytest tests/ -v
 Unit tests run without a Spark JVM or Delta JAR download; a full Spark run is
 only exercised when `data/raw/` is populated.
 
+For the full local Spark test suite on this Windows machine, use the JVM thread
+mitigation documented in `docs/dashboard_runbook.md`:
+
+```powershell
+$env:JAVA_TOOL_OPTIONS="-XX:ActiveProcessorCount=2 -XX:CICompilerCount=2 -XX:TieredStopAtLevel=1 -Xss512k"
+python -m pytest tests -q
+Remove-Item Env:\JAVA_TOOL_OPTIONS
+```
+
+## Run the Dashboard
+
+Export compact local dashboard marts, then launch Streamlit:
+
+```powershell
+python scripts/export_dashboard_data.py
+streamlit run streamlit_app.py
+```
+
+The dashboard reads only local CSV/JSON marts from `data/dashboard/`, so Spark
+does not start on every page refresh. Demand forecasting is shown honestly:
+the `naive_lag_1` prior-month baseline beat XGBoost on chronological
+validation, so XGBoost is not the selected champion model.
+
 ## Pipeline Layers
 
 | Layer | Module | Output |
