@@ -16,8 +16,11 @@ from src.ui import (
     glass_card,
     info_callout,
     metric_card,
+    payment_method_label,
     plotly_glass_layout,
+    rfm_segment_description,
     section_header,
+    seller_monetary_label,
     status_badge,
 )
 
@@ -34,7 +37,10 @@ st.set_page_config(
 @st.cache_data(show_spinner=False)
 def read_csv(name: str) -> pd.DataFrame:
     """Read a dashboard CSV mart."""
-    return pd.read_csv(DASHBOARD_DIR / name)
+    try:
+        return pd.read_csv(DASHBOARD_DIR / name)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
 
 
 @st.cache_data(show_spinner=False)
@@ -63,6 +69,18 @@ def percent(value: float | int | None) -> str:
     return f"{float(value or 0.0) * 100:.1f}%"
 
 
+def money_full(value: float | int | None) -> str:
+    """Format a full Brazilian Real value."""
+    return f"R$ {float(value or 0.0):,.2f}"
+
+
+def metric_or_na(value: float | int | None, suffix: str = "", decimals: int = 2) -> str:
+    """Format a metric value, preserving missingness as unavailable."""
+    if value is None or pd.isna(value):
+        return "Not available"
+    return f"{float(value):.{decimals}f}{suffix}"
+
+
 def style_fig(fig: go.Figure, title: str | None = None) -> go.Figure:
     """Apply the CloudIQ Plotly glass theme."""
     fig.update_layout(**plotly_glass_layout(title))
@@ -70,11 +88,12 @@ def style_fig(fig: go.Figure, title: str | None = None) -> go.Figure:
     return fig
 
 
-def render_hero() -> None:
+def render_hero(compact: bool = False) -> None:
     """Render the dashboard hero."""
+    hero_class = "cloudiq-hero compact" if compact else "cloudiq-hero"
     st.markdown(
-        """
-        <div class="cloudiq-hero">
+        f"""
+        <div class="{hero_class}">
           <h1>CloudIQ - E-Commerce ML Intelligence Platform</h1>
           <div class="cloudiq-subtitle">
             Historical Olist marketplace analysis | 2016-2018 | Local validated pipeline
@@ -97,7 +116,11 @@ def require_dashboard_data() -> bool:
         "rfm_segment_distribution.csv",
         "rfm_segment_profiles.csv",
         "seller_performance.csv",
-        "demand_validation_predictions.csv",
+        "demand_backtest_input.csv",
+        "demand_backtest_predictions.csv",
+        "demand_backtest_monthly_aggregate.csv",
+        "demand_backtest_category_errors.csv",
+        "demand_backtest_fold_metrics.csv",
         "demand_model_metrics.json",
         "data_quality_summary.json",
     ]
@@ -118,28 +141,43 @@ def overview_page() -> None:
     monthly = read_csv("monthly_revenue.csv")
     state = read_csv("state_revenue.csv")
     payments = read_csv("payment_mix.csv")
+    comparable_monthly = monthly[monthly["is_comparable_period"].astype(bool)]
 
     cols = st.columns(4)
     with cols[0]:
         metric_card("Total Orders", number(kpis["total_orders"]), "Silver master orders")
     with cols[1]:
-        metric_card("Total Revenue", money(kpis["total_revenue"]), "Order-item revenue")
+        metric_card(
+            "Item Merchandise Value (excludes freight)",
+            money(kpis["item_merchandise_value_ex_freight"]),
+            "Sum of item prices",
+        )
     with cols[2]:
-        metric_card("Average Order Value", money(kpis["avg_order_value"]), "Revenue / orders")
+        metric_card(
+            "Average Item Merchandise Value per Order",
+            money(kpis["avg_item_merchandise_value_per_order"]),
+            "Item value / orders",
+        )
     with cols[3]:
         metric_card("Late Delivery Rate", percent(kpis["late_delivery_rate"]), "Delivered orders with late flag")
 
-    section_header("Revenue Trend", "Monthly order volume and revenue from Gold BI revenue.")
+    section_header(
+        "Item Revenue Trend",
+        "Comparable monthly periods only; low-volume and partial periods are listed below.",
+    )
     fig = px.line(
-        monthly,
+        comparable_monthly,
         x="order_year_month",
-        y="total_revenue",
+        y="item_merchandise_value_ex_freight",
         markers=True,
-        labels={"order_year_month": "Month", "total_revenue": "Revenue"},
+        labels={
+            "order_year_month": "Month",
+            "item_merchandise_value_ex_freight": "Item merchandise value (R$)",
+        },
     )
     fig.add_bar(
-        x=monthly["order_year_month"],
-        y=monthly["total_orders"],
+        x=comparable_monthly["order_year_month"],
+        y=comparable_monthly["order_count"],
         name="Orders",
         yaxis="y2",
         opacity=0.32,
@@ -153,30 +191,55 @@ def overview_page() -> None:
             "title": "Orders",
         }
     )
-    st.plotly_chart(style_fig(fig, "Monthly Revenue and Orders"), use_container_width=True)
+    fig.update_traces(
+        hovertemplate="%{x}<br>R$ %{y:,.2f}<extra></extra>",
+        selector={"type": "scatter"},
+    )
+    st.plotly_chart(style_fig(fig, "Monthly Item Revenue and Orders"), use_container_width=True)
+    excluded = monthly[~monthly["is_comparable_period"].astype(bool)]
+    with st.expander("Excluded partial or low-volume periods", expanded=False):
+        st.dataframe(
+            excluded[
+                [
+                    "order_year_month",
+                    "order_count",
+                    "is_partial_period",
+                    "is_low_volume_period",
+                    "item_merchandise_value_ex_freight",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
 
     left, right = st.columns([1.15, 0.85])
     with left:
-        section_header("Revenue by Customer State")
+        section_header("Item Revenue by Customer State")
         state_fig = px.bar(
             state.head(15),
             x="customer_state",
-            y="total_revenue",
-            color="total_revenue",
+            y="item_merchandise_value_ex_freight",
+            color="item_merchandise_value_ex_freight",
             color_continuous_scale=["#7bd3ff", "#96f2c2"],
-            labels={"customer_state": "State", "total_revenue": "Revenue"},
+            labels={
+                "customer_state": "State",
+                "item_merchandise_value_ex_freight": "Item merchandise value (R$)",
+            },
         )
-        st.plotly_chart(style_fig(state_fig, "Top States by Revenue"), use_container_width=True)
+        st.plotly_chart(
+            style_fig(state_fig, "Top States by Item Merchandise Value"),
+            use_container_width=True,
+        )
     with right:
-        section_header("Payment Mix")
+        section_header(payment_method_label())
         payment_fig = px.pie(
             payments,
-            values="total_orders",
+            values="order_count",
             names="primary_payment_type",
             hole=0.58,
         )
         payment_fig.update_traces(textposition="inside", textinfo="percent+label")
-        st.plotly_chart(style_fig(payment_fig, "Orders by Payment Type"), use_container_width=True)
+        st.plotly_chart(style_fig(payment_fig, payment_method_label()), use_container_width=True)
 
     section_header("What This Project Demonstrates")
     glass_card(
@@ -188,87 +251,123 @@ def overview_page() -> None:
 
 
 def demand_page() -> None:
-    """Render demand forecasting results."""
+    """Render demand forecasting backtest results."""
     metrics = read_json("demand_model_metrics.json")
-    predictions = read_csv("demand_validation_predictions.csv")
+    predictions = read_csv("demand_backtest_predictions.csv")
+    monthly = read_csv("demand_backtest_monthly_aggregate.csv")
+    category_errors = read_csv("demand_backtest_category_errors.csv")
+    folds = read_csv("demand_backtest_fold_metrics.csv")
     champion = metrics.get("champion_model", "naive_lag_1")
+    champion_display = metrics.get("champion_display_name", "Naive Lag-1 Benchmark")
     metric_map = metrics.get("metrics", {})
-    naive = metric_map.get("naive_lag_1", {})
-    xgb = metric_map.get("xgboost", {})
+    champion_metrics = metric_map.get(champion, {})
     validation = metrics.get("validation", {}).get("date_range", {})
+    validation_meta = metrics.get("validation", {})
 
+    section_header(
+        "Demand Forecast Backtest",
+        "Out-of-fold rolling validation using forecast_month targets and prior-month features.",
+    )
     glass_card(
         (
             "<div class='metric-label'>Champion</div>"
-            "<div class='metric-value'>Naive Prior-Month Baseline</div>"
-            "<div class='metric-caption'>XGBoost was evaluated but not selected because it performed worse on chronological validation.</div>"
+            f"<div class='metric-value'>{champion_display}</div>"
+            f"<div class='metric-caption'>{metrics.get('champion_reason', '')}</div>"
         )
     )
 
     cols = st.columns(4)
     with cols[0]:
-        metric_card("MAE", f"{naive.get('mae', 0):.2f}", f"Champion: {champion}")
+        metric_card("MAE", metric_or_na(champion_metrics.get("mae")), f"Champion: {champion}")
     with cols[1]:
-        metric_card("RMSE", f"{naive.get('rmse', 0):.2f}", "Validation holdout")
+        metric_card("WAPE", metric_or_na(champion_metrics.get("wape"), "%", 1), "Primary pooled metric")
     with cols[2]:
-        metric_card("MAPE", f"{naive.get('mape', 0):.1f}%", "Zero-safe metric")
+        metric_card("RMSE", metric_or_na(champion_metrics.get("rmse")), "Secondary metric")
     with cols[3]:
-        metric_card("R²", f"{naive.get('r2', 0):.3f}", "Chronological split")
+        metric_card(
+            "Evaluation Rows",
+            number(validation_meta.get("row_count")),
+            f"{validation_meta.get('fold_count', 0)} folds",
+        )
 
     with st.expander("Naive vs XGBoost metrics", expanded=False):
         st.dataframe(
             pd.DataFrame(
                 [
-                    {"model": "naive_lag_1", **naive},
-                    {"model": "xgboost", **xgb},
+                    {"model": model_name, **model_metrics}
+                    for model_name, model_metrics in metric_map.items()
                 ]
             ),
             use_container_width=True,
             hide_index=True,
         )
+        st.caption("WAPE and MAE drive model selection. RMSE, sMAPE, MAPE, and R2 are diagnostic.")
 
-    filtered = predictions.copy()
-    if "category_name_english" in filtered.columns:
-        categories = sorted(filtered["category_name_english"].dropna().unique().tolist())
-        selected = st.selectbox("Category", ["All categories", *categories])
-        if selected != "All categories":
-            filtered = filtered[filtered["category_name_english"] == selected]
-
-    section_header("Actual vs Predicted", "Validation predictions from the saved demand forecast report.")
-    if filtered.empty:
-        info_callout("No validation predictions are available for the selected category.")
+    section_header(
+        "Monthly Aggregate Actual vs Predicted",
+        "The chart uses only the same out-of-fold rows included in the reported metrics.",
+    )
+    fig = go.Figure()
+    if not monthly.empty and {"forecast_month_label", "actual_units", "champion_prediction"}.issubset(monthly.columns):
+        fig.add_trace(
+            go.Scatter(
+                x=monthly["forecast_month_label"],
+                y=monthly["actual_units"],
+                mode="lines+markers",
+                name="Actual units",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=monthly["forecast_month_label"],
+                y=monthly["champion_prediction"],
+                mode="lines+markers",
+                name="Champion prediction",
+            )
+        )
+        st.plotly_chart(
+            style_fig(fig, "Rolling Backtest: Actual vs Predicted Units"),
+            use_container_width=True,
+        )
     else:
-        chart_frame = (
-            filtered.groupby("order_year_month", as_index=False)[
-                ["target_next_month", "champion_prediction"]
-            ]
-            .sum()
-            .sort_values("order_year_month")
+        info_callout("Demand backtest monthly aggregates are missing. Run the local export and training commands.")
+
+    section_header("Category-Level Error", "Absolute unit error across the same out-of-fold validation sample.")
+    if category_errors.empty:
+        info_callout("No category-level backtest errors are available yet.")
+    else:
+        categories = sorted(category_errors["category_name_english"].dropna().unique().tolist())
+        selected = st.selectbox("Category", ["All categories", *categories])
+        category_error = category_errors.copy()
+        if selected != "All categories":
+            category_error = category_error[category_error["category_name_english"] == selected]
+        top_errors = category_error.sort_values("absolute_error", ascending=False).head(20)
+        err_fig = px.bar(
+            top_errors,
+            x="absolute_error",
+            y="category_name_english",
+            orientation="h",
+            labels={
+                "absolute_error": "Absolute unit error",
+                "category_name_english": "Category",
+            },
         )
-        fig = go.Figure()
-        fig.add_trace(
-            go.Scatter(
-                x=chart_frame["order_year_month"],
-                y=chart_frame["target_next_month"],
-                mode="lines+markers",
-                name="Actual",
-            )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=chart_frame["order_year_month"],
-                y=chart_frame["champion_prediction"],
-                mode="lines+markers",
-                name="Predicted",
-            )
-        )
-        st.plotly_chart(style_fig(fig, "Validation: Actual vs Predicted Units"), use_container_width=True)
+        err_fig.update_layout(yaxis={"categoryorder": "total ascending"})
+        st.plotly_chart(style_fig(err_fig, "Top Category Errors"), use_container_width=True)
+        st.dataframe(top_errors, use_container_width=True, hide_index=True)
 
     info_callout(
-        "Historical validation: "
-        f"{validation.get('start', '2018-06')} to {validation.get('end', '2018-07')}. "
-        "This is not a live forecast. MAPE can be unstable for low-volume categories."
+        "Historical out-of-fold validation: "
+        f"{validation.get('start', '')} to {validation.get('end', '')}. "
+        "This is not a live forecast."
     )
+    if not predictions.empty:
+        info_callout("Naive baseline prediction equals lag_1 for every evaluated category-month row.")
+    with st.expander("Fold coverage", expanded=False):
+        if folds.empty:
+            info_callout("Rolling fold metrics are not available yet.")
+        else:
+            st.dataframe(folds, use_container_width=True, hide_index=True)
 
 
 def segmentation_page() -> None:
@@ -287,20 +386,23 @@ def segmentation_page() -> None:
     )
     st.plotly_chart(style_fig(fig, "Customers by RFM Segment"), use_container_width=True)
 
-    descriptions = {
-        "Champion": "Highest combined recency, frequency, and monetary scores.",
-        "Loyal": "Strong repeat and value profile, below Champion threshold.",
-        "Potential": "Middle RFM profile with room for engagement.",
-        "At Risk": "Lower combined RFM score than active growth segments.",
-        "Lost": "Lowest combined RFM profile in the historical data.",
-    }
     cols = st.columns(5)
-    for idx, (segment, text) in enumerate(descriptions.items()):
+    for idx, segment in enumerate(["Champion", "Loyal", "Potential", "At Risk", "Lost"]):
         with cols[idx]:
-            metric_card(segment, number(distribution.loc[distribution["segment_label"] == segment, "customers"].sum()), text)
+            metric_card(
+                segment,
+                number(distribution.loc[distribution["segment_label"] == segment, "customers"].sum()),
+                rfm_segment_description(segment),
+            )
 
-    section_header("Segment Profiles", "Aggregated only; no customer IDs are exported.")
+    section_header(
+        "Segment Profiles",
+        "Aggregated only; repeat rate is shown because average order counts are close to one.",
+    )
     st.dataframe(profiles, use_container_width=True, hide_index=True)
+    info_callout(
+        "RFM segments are relative historical behavior tiers. In this dataset, repeat purchasing is limited, so segment labels do not imply proven customer loyalty or churn risk."
+    )
     info_callout("Segmentation is descriptive RFM analysis and is not a churn classifier.")
 
 
@@ -323,30 +425,85 @@ def operations_page() -> None:
     if tier_filter != "All":
         filtered = filtered[filtered["performance_tier"] == tier_filter]
 
-    section_header("Seller Performance", "Seller-level revenue, order count, reviews, and late rate.")
-    st.dataframe(filtered.head(250), use_container_width=True, hide_index=True)
+    section_header(
+        "Seller Performance",
+        f"{seller_monetary_label()}; full raw seller IDs are not shown.",
+    )
+    display = filtered.head(250).copy()
+    display["total_orders"] = display["total_orders"].map(lambda value: f"{int(value):,}")
+    display["seller_attributed_order_value"] = display[
+        "seller_attributed_order_value"
+    ].map(money_full)
+    display["avg_review"] = display["avg_review"].map(
+        lambda value: "" if pd.isna(value) else f"{float(value):.2f}"
+    )
+    display["late_rate"] = display["late_rate"].map(
+        lambda value: "" if pd.isna(value) else percent(value)
+    )
+    display = display.rename(
+        columns={
+            "seller_rank": "Rank",
+            "seller_id_short": "Seller ID",
+            "seller_state": "State",
+            "total_orders": "Orders",
+            "seller_attributed_order_value": seller_monetary_label(),
+            "avg_review": "Avg Review",
+            "late_rate": "Late Rate",
+            "performance_tier": "Tier",
+        }
+    )
+    st.dataframe(display, use_container_width=True, hide_index=True)
 
-    section_header("Late Delivery Performance")
+    section_header("Late Delivery Performance", "Months below 100 delivered orders are flagged and excluded from the default trend.")
+    delivery_plot = delivery[
+        (~delivery["is_low_delivered_volume_period"].astype(bool))
+        & (delivery["late_delivery_rate_display"].notna())
+    ]
     delivery_fig = px.line(
-        delivery,
+        delivery_plot,
         x="order_year_month",
-        y="late_delivery_rate",
+        y="late_delivery_rate_display",
         markers=True,
-        labels={"order_year_month": "Month", "late_delivery_rate": "Late delivery rate"},
+        labels={
+            "order_year_month": "Month",
+            "late_delivery_rate_display": "Late delivery rate",
+        },
+        custom_data=["delivered_order_count"],
+    )
+    delivery_fig.update_traces(
+        hovertemplate="%{x}<br>Late rate: %{y:.1%}<br>Delivered orders: %{customdata[0]:,}<extra></extra>"
     )
     st.plotly_chart(style_fig(delivery_fig, "Monthly Late-Delivery Rate"), use_container_width=True)
+    with st.expander("Flagged low-denominator delivery periods", expanded=False):
+        st.dataframe(
+            delivery.loc[
+                delivery["is_low_delivered_volume_period"].astype(bool),
+                [
+                    "order_year_month",
+                    "order_count",
+                    "delivered_order_count",
+                    "late_delivery_rate",
+                    "is_partial_period",
+                    "is_low_volume_period",
+                ],
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
 
     if not filtered.empty:
         top_state = (
-            filtered.groupby("seller_state", as_index=False)["total_revenue"]
+            filtered.groupby("seller_state", as_index=False)[
+                "seller_attributed_order_value"
+            ]
             .sum()
-            .sort_values("total_revenue", ascending=False)
+            .sort_values("seller_attributed_order_value", ascending=False)
             .iloc[0]
         )
         top_tier = filtered["performance_tier"].value_counts().idxmax()
         info_callout(
-            "For the current filters, the highest seller revenue state is "
-            f"{top_state['seller_state']} ({money(top_state['total_revenue'])}), "
+            "For the current filters, the highest seller-attributed value state is "
+            f"{top_state['seller_state']} ({money(top_state['seller_attributed_order_value'])}), "
             f"and the most common performance tier is {top_tier}."
         )
     else:
@@ -358,12 +515,18 @@ def quality_page() -> None:
     quality = read_json("data_quality_summary.json")
     audit = quality.get("source_audit", {})
     validation = quality.get("pipeline_validation", {})
+    metric_definitions = quality.get("metric_definitions", {})
+    source_characteristics = quality.get("source_characteristics", {})
 
     cols = st.columns(3)
     with cols[0]:
         metric_card("Source Audit Verdict", str(audit.get("executive_verdict", "unknown")), "Raw Olist audit")
     with cols[1]:
-        metric_card("Bronze Safe", str(audit.get("safe_to_run_bronze", "unknown")), "Audit decision")
+        metric_card(
+            "Bronze Reconciliation",
+            str(audit.get("bronze_reconciliation", "unknown")),
+            "Raw-to-Bronze counts",
+        )
     with cols[2]:
         metric_card("Demand Feature Rows", number(quality.get("demand_feature_rows")), "Gold demand_features")
 
@@ -381,27 +544,47 @@ def quality_page() -> None:
     for note in quality.get("methodology_notes", []):
         info_callout(note)
 
-    gap = audit.get("translation_lookup_gap", {})
-    warnings = audit.get("warnings", [])
     glass_card(
-        "Unmatched category translation fallback: "
-        f"{gap.get('unmatched_product_row_count', 0)} product rows across "
-        f"{gap.get('unmatched_distinct_category_count', 0)} categories. "
-        "These are warnings, not raw-data failures."
+        "13 product rows across 2 categories retained using untranslated__ fallback labels."
     )
-    if warnings:
-        section_header("Data Quality Warnings")
-        for warning in warnings:
-            st.caption(f"- {warning}")
+    section_header("Metric Definitions")
+    for name, definition in metric_definitions.items():
+        info_callout(f"{name}: {definition}")
+
+    section_header("Source Characteristics")
+    info_callout(str(source_characteristics.get("geolocation_note", "")))
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "characteristic": "geolocation_duplicate_zip_code_rows",
+                    "value": source_characteristics.get("geolocation_duplicate_zip_code_rows"),
+                },
+                {
+                    "characteristic": "geolocation_exact_duplicate_rows",
+                    "value": source_characteristics.get("geolocation_exact_duplicate_rows"),
+                },
+            ]
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    period_quality = quality.get("period_quality", {})
+    section_header("Period Coverage Flags")
+    st.caption(
+        "Business trend charts default to comparable periods and keep excluded partial/low-volume months available for review."
+    )
+    st.dataframe(
+        pd.DataFrame(period_quality.get("excluded_business_trend_periods", [])),
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
 def main() -> None:
     """Run the dashboard."""
     apply_glass_theme()
-    render_hero()
-    if not require_dashboard_data():
-        return
-
     page = st.sidebar.radio(
         "Dashboard section",
         [
@@ -412,7 +595,10 @@ def main() -> None:
             "Data Quality & Methodology",
         ],
     )
-    st.sidebar.caption("Local compact marts in data/dashboard/.")
+    st.sidebar.caption("Historical dataset · validated local extracts")
+    render_hero(compact=page != "Executive Overview")
+    if not require_dashboard_data():
+        return
 
     if page == "Executive Overview":
         overview_page()

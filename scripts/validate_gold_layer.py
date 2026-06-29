@@ -40,24 +40,36 @@ def _count(df: "DataFrame") -> int:
 def _expected_demand_features(product_demand: "DataFrame") -> "DataFrame":
     """Recompute leakage-safe demand features from Silver demand."""
     win = Window.partitionBy("category_name_english").orderBy("order_year_month")
-    roll_win = win.rowsBetween(-3, -1)
+    roll_win = win.rowsBetween(-2, 0)
     return (
         product_demand.select(
             "category_name_english",
             "order_year_month",
             "monthly_units",
         )
+        .withColumn("feature_cutoff_month", F.col("order_year_month"))
         .withColumn(
-            "expected_target_next_month",
+            "_feature_month_date",
+            F.to_date(F.concat(F.col("order_year_month"), F.lit("-01"))),
+        )
+        .withColumn(
+            "forecast_month",
+            F.date_format(F.add_months("_feature_month_date", 1), "yyyy-MM"),
+        )
+        .withColumn(
+            "expected_target_units",
             F.lead("monthly_units", 1).over(win),
         )
-        .withColumn("expected_lag_4", F.lag("monthly_units", 4).over(win))
+        .withColumn("expected_lag_4", F.lag("monthly_units", 3).over(win))
         .withColumn(
             "expected_rolling_mean_3",
             F.avg("monthly_units").over(roll_win),
         )
+        .withColumn("expected_lag_1", F.col("monthly_units"))
+        .withColumn("expected_lag_2", F.lag("monthly_units", 1).over(win))
         .filter(F.col("expected_lag_4").isNotNull())
-        .filter(F.col("expected_target_next_month").isNotNull())
+        .filter(F.col("expected_target_units").isNotNull())
+        .drop("_feature_month_date", "order_year_month")
     )
 
 
@@ -69,23 +81,31 @@ def _validate_demand_features(
     expected = _expected_demand_features(product_demand)
     compared = actual.join(
         expected,
-        ["category_name_english", "order_year_month"],
+        ["category_name_english", "forecast_month"],
         "full",
     )
     mismatches = compared.filter(
-        F.col("target_next_month").isNull()
+        F.col("target_units").isNull()
+        | F.col("lag_1").isNull()
+        | F.col("lag_2").isNull()
         | F.col("lag_4").isNull()
         | F.col("rolling_mean_3").isNull()
-        | F.col("expected_target_next_month").isNull()
+        | F.col("expected_target_units").isNull()
+        | F.col("expected_lag_1").isNull()
+        | F.col("expected_lag_2").isNull()
         | F.col("expected_lag_4").isNull()
         | F.col("expected_rolling_mean_3").isNull()
-        | (F.abs(F.col("target_next_month") - F.col("expected_target_next_month")) > 1e-9)
+        | (F.abs(F.col("target_units") - F.col("expected_target_units")) > 1e-9)
+        | (F.abs(F.col("lag_1") - F.col("expected_lag_1")) > 1e-9)
+        | (F.abs(F.col("lag_2") - F.col("expected_lag_2")) > 1e-9)
         | (F.abs(F.col("lag_4") - F.col("expected_lag_4")) > 1e-9)
         | (F.abs(F.col("rolling_mean_3") - F.col("expected_rolling_mean_3")) > 1e-9)
     )
     return {
         "demand_required_fields_not_null": actual.filter(
-            F.col("target_next_month").isNull()
+            F.col("target_units").isNull()
+            | F.col("lag_1").isNull()
+            | F.col("lag_2").isNull()
             | F.col("lag_4").isNull()
             | F.col("rolling_mean_3").isNull()
         ).count()

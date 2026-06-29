@@ -55,3 +55,33 @@ def info_callout(text: str) -> None:
         f'<div class="info-callout">{escape(text)}</div>',
         unsafe_allow_html=True,
     )
+
+
+def rfm_segment_description(segment: str) -> str:
+    """Return evidence-conscious copy for an RFM segment label."""
+    descriptions = {
+        "Champion": "Highest relative RFM score within this historical marketplace dataset.",
+        "Loyal": "Higher relative RFM score within this historical marketplace dataset.",
+        "Potential": "Middle relative RFM tier based on recency, frequency, and monetary scores.",
+        "At Risk": "Lower relative RFM tier within the historical dataset.",
+        "Lost": "Lowest relative RFM tier within the historical dataset.",
+    }
+    return descriptions.get(segment, "Relative historical RFM behavior tier.")
+
+
+def seller_monetary_label() -> str:
+    """Return the precise seller value label used by the dashboard."""
+    return "Seller-Attributed Order Value (item + freight)"
+
+
+def payment_method_label() -> str:
+    """Return the deterministic primary-payment chart label."""
+    return "Orders by Primary Payment Type"
+
+
+def late_delivery_rate_definition() -> str:
+    """Return the exact dashboard definition for late-delivery rate."""
+    return (
+        "Late-delivery rate = delivered orders received after the estimated delivery "
+        "date divided by all delivered orders with valid actual and estimated delivery dates."
+    )

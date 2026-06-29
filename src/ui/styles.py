@@ -35,9 +35,9 @@ def apply_glass_theme() -> None:
         }
 
         .block-container {
-          padding-top: 2.2rem;
+          padding-top: 1.6rem;
           padding-bottom: 3rem;
-          max-width: 1320px;
+          max-width: 1400px;
         }
 
         [data-testid="stSidebar"] {
@@ -59,11 +59,21 @@ def apply_glass_theme() -> None:
           backdrop-filter: blur(22px);
         }
 
+        .cloudiq-hero.compact {
+          padding: 0.9rem 1.1rem;
+          margin-bottom: 0.7rem;
+          border-radius: 20px;
+        }
+
         .cloudiq-hero h1 {
           margin: 0;
           letter-spacing: 0;
           font-size: clamp(2rem, 3.2vw, 3.7rem);
           line-height: 1.05;
+        }
+
+        .cloudiq-hero.compact h1 {
+          font-size: clamp(1.45rem, 2vw, 2.2rem);
         }
 
         .cloudiq-subtitle {
@@ -164,6 +174,19 @@ def apply_glass_theme() -> None:
           border-radius: 999px;
           padding: 0.42rem 0.8rem;
           background: rgba(255,255,255,0.06);
+        }
+
+        div[role="radiogroup"] label[data-baseweb="radio"] > div:first-child {
+          border-color: rgba(123,211,255,0.72);
+        }
+
+        div[role="radiogroup"] label[data-baseweb="radio"] > div:first-child > div {
+          background-color: var(--cloudiq-blue);
+        }
+
+        div[data-baseweb="select"] > div {
+          background: rgba(255,255,255,0.08);
+          border-color: rgba(123,211,255,0.24);
         }
         </style>
         """,

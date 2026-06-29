@@ -95,9 +95,33 @@ streamlit run streamlit_app.py
 ```
 
 The dashboard reads only local CSV/JSON marts from `data/dashboard/`, so Spark
-does not start on every page refresh. Demand forecasting is shown honestly:
-the `naive_lag_1` prior-month baseline beat XGBoost on chronological
-validation, so XGBoost is not the selected champion model.
+does not start on every page refresh. It is explicitly historical Olist
+marketplace data from 2016-2018, not live production data.
+
+Demand forecasting is shown as an expanding-window rolling backtest.
+`forecast_month` is the month being predicted, `target_units` is the observed
+unit demand in that month, and every lag feature is known before the forecast
+month starts. The `naive_lag_1` benchmark is retained unless XGBoost improves
+the measured out-of-fold WAPE/MAE selection criterion. MAPE is reported only as
+a diagnostic because low-volume categories distort percentage errors.
+
+Dashboard metric definitions:
+
+- Item Merchandise Value (excludes freight): sum of order item price values.
+- Average Item Merchandise Value per Order: item merchandise value excluding
+  freight divided by distinct orders.
+- Seller-Attributed Order Value (item + freight): seller-level value including
+  item price plus freight.
+- Orders by Primary Payment Type: one deterministic payment type per order,
+  selected by highest payment value, then lowest payment sequence, then payment
+  type alphabetically.
+- Late-delivery rate = delivered orders received after the estimated delivery
+  date divided by all delivered orders with valid actual and estimated delivery
+  dates.
+- RFM segments are relative historical tiers; repeat purchasing is limited, so
+  labels do not prove loyalty or churn risk.
+- Churn classification is intentionally not trained because the snapshot target
+  has 99.25% inactivity.
 
 ## Pipeline Layers
 
@@ -109,11 +133,9 @@ validation, so XGBoost is not the selected champion model.
 
 ## Key Design Decisions (Architecture Corrections)
 
-- **Demand target** is `monthly_units` (C2). Demand history, features, and the
-  training/evaluation window all end at **2018-09**; the partial October 2018
-  month is excluded (C16).
-- **`rolling_mean_3`** uses `rowsBetween(-3, -1)` — the three preceding months
-  only, never the current month (C16).
+- **Demand forecast contract** uses `forecast_month` as the month being
+  predicted and `target_units` as actual units in that month. `lag_1`,
+  `lag_2`, `lag_4`, and `rolling_mean_3` are all prior to `forecast_month`.
 - **Churn features** are temporal snapshots from `silver/master_orders` with a
   future 90-day repeat-purchase label; `recency_days` and `log_recency` are
   excluded (C1).

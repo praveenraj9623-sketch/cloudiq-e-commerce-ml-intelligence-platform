@@ -314,11 +314,12 @@ class GoldLayer:
         return history
 
     def build_demand_forecast_features(self) -> DataFrame:
-        """Build next-month demand forecasting features.
+        """Build leakage-safe monthly demand forecasting features.
 
-        ``target_next_month`` is the next row's observed ``monthly_units`` for
-        each category. All lag and rolling features use prior rows only; the
-        current month's observed demand is never included in ``rolling_mean_3``.
+        ``forecast_month`` is the month being predicted and ``target_units`` is
+        that month's observed demand. Each feature is available by the end of
+        the prior month: ``lag_1`` is the prior month's units and
+        ``rolling_mean_3`` averages forecast_month -3 through -1.
         """
         demand = self._read_silver("product_demand").select(
             "category_name_english",
@@ -330,29 +331,42 @@ class GoldLayer:
         win = Window.partitionBy("category_name_english").orderBy(
             "order_year_month"
         )
-        roll_win = win.rowsBetween(-3, -1)
+        roll_win = win.rowsBetween(-2, 0)
         features = (
             demand.withColumn(
-                "target_next_month",
+                "feature_cutoff_month",
+                F.col("order_year_month"),
+            )
+            .withColumn(
+                "_feature_month_date",
+                F.to_date(F.concat(F.col("order_year_month"), F.lit("-01"))),
+            )
+            .withColumn(
+                "forecast_month",
+                F.date_format(F.add_months("_feature_month_date", 1), "yyyy-MM"),
+            )
+            .withColumn(
+                "target_units",
                 F.lead("monthly_units", 1).over(win),
             )
-            .withColumn("lag_1", F.lag("monthly_units", 1).over(win))
-            .withColumn("lag_2", F.lag("monthly_units", 2).over(win))
-            .withColumn("lag_4", F.lag("monthly_units", 4).over(win))
+            .withColumn("lag_1", F.col("monthly_units"))
+            .withColumn("lag_2", F.lag("monthly_units", 1).over(win))
+            .withColumn("lag_4", F.lag("monthly_units", 3).over(win))
             .withColumn(
                 "rolling_mean_3",
                 F.avg("monthly_units").over(roll_win),
             )
             .withColumn(
                 "month_num",
-                F.month(F.to_date(F.col("order_year_month"), "yyyy-MM")),
+                F.month(F.to_date(F.concat(F.col("forecast_month"), F.lit("-01")))),
             )
             .withColumn(
                 "is_q4",
                 F.when(F.col("month_num") >= 10, 1).otherwise(0),
             )
             .filter(F.col("lag_4").isNotNull())
-            .filter(F.col("target_next_month").isNotNull())
+            .filter(F.col("target_units").isNotNull())
+            .drop("_feature_month_date", "order_year_month")
         )
         features.write.format("delta").mode("overwrite").option(
             "overwriteSchema", "true"

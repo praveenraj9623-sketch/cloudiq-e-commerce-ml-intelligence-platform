@@ -55,7 +55,7 @@ def _write_delta(spark: Any, rows: list[tuple], schema: StructType, path: Path) 
 def test_demand_features_use_prior_rows_and_next_month_target(
     tmp_path: Path,
 ) -> None:
-    """Demand rolling windows exclude current month and target the next month."""
+    """Demand rows predict forecast_month using only prior-month features."""
     config = _write_config(tmp_path)
     spark = get_spark_session(config, app_name="CloudIQ-Test-Gold-Demand")
     silver_dir = tmp_path / "silver"
@@ -83,15 +83,16 @@ def test_demand_features_use_prior_rows_and_next_month_target(
             silver_dir / "product_demand",
         )
         rows = GoldLayer(spark, config).build_demand_forecast_features().collect()
-        assert len(rows) == 1
-        row = rows[0]
-        assert row["order_year_month"] == "2018-05"
+        by_forecast_month = {row["forecast_month"]: row for row in rows}
+        assert set(by_forecast_month) == {"2018-05", "2018-06"}
+        row = by_forecast_month["2018-06"]
+        assert row["feature_cutoff_month"] == "2018-05"
         assert row["monthly_units"] == 50
-        assert row["target_next_month"] == 60
-        assert row["lag_1"] == 40
-        assert row["lag_2"] == 30
-        assert row["lag_4"] == 10
-        assert row["rolling_mean_3"] == 30
+        assert row["target_units"] == 60
+        assert row["lag_1"] == 50
+        assert row["lag_2"] == 40
+        assert row["lag_4"] == 20
+        assert row["rolling_mean_3"] == 40
     finally:
         spark.stop()
 
