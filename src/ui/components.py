@@ -9,6 +9,11 @@ import streamlit as st
 PRODUCT_TRANSLATION_FALLBACK_NOTE = (
     "13 product rows across 2 categories retained using untranslated__ fallback labels."
 )
+_PRODUCT_TRANSLATION_FALLBACK_MARKERS = (
+    "13 product rows",
+    "2 categor",
+    "untranslated__ fallback",
+)
 
 
 def glass_card(body: str, extra_class: str = "") -> None:
@@ -96,5 +101,11 @@ def methodology_notes_without_duplicate_fallback(notes: list[str]) -> list[str]:
     return [
         str(note)
         for note in notes
-        if str(note).strip() != PRODUCT_TRANSLATION_FALLBACK_NOTE
+        if not _is_product_translation_fallback_note(str(note))
     ]
+
+
+def _is_product_translation_fallback_note(note: str) -> bool:
+    """Return true when a note is the product translation fallback message."""
+    normalized = " ".join(note.lower().split())
+    return all(marker in normalized for marker in _PRODUCT_TRANSLATION_FALLBACK_MARKERS)

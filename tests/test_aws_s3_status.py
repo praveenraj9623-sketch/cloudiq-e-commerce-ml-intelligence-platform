@@ -85,7 +85,7 @@ def test_duplicate_methodology_note_is_not_rendered_twice() -> None:
     """Generated notes exclude the static fallback card copy."""
     generated_notes = [
         "Reviews Bronze ingestion uses multiline-safe CSV parsing.",
-        PRODUCT_TRANSLATION_FALLBACK_NOTE,
+        "13 product rows across 2 categories are retained using untranslated__ fallback labels.",
         "Demand features predict target_units for forecast_month.",
     ]
 
@@ -95,6 +95,27 @@ def test_duplicate_methodology_note_is_not_rendered_twice() -> None:
     ]
 
     assert rendered_notes.count(PRODUCT_TRANSLATION_FALLBACK_NOTE) == 1
+
+
+def test_streamlit_css_hardens_dark_select_and_hero_contrast() -> None:
+    """Dashboard CSS includes explicit dark-theme text and select controls."""
+    root = Path(__file__).resolve().parents[1]
+    styles = (root / "src" / "ui" / "styles.py").read_text(encoding="utf-8")
+    config = (root / ".streamlit" / "config.toml").read_text(encoding="utf-8")
+
+    assert "--cloudiq-text-primary: #f4f8fb" in styles
+    assert "--cloudiq-control-bg-selected" in styles
+    assert "--cloudiq-dropdown-bg" in styles
+    assert ".cloudiq-hero h1" in styles
+    assert "color: var(--cloudiq-text-primary) !important" in styles
+    assert 'div[data-testid="stSelectbox"] label' in styles
+    assert '[data-baseweb="select"]' in styles
+    assert '[role="listbox"]' in styles
+    assert '[role="option"][aria-selected="true"]' in styles
+    assert ".aws-generated-at" in styles
+    assert ".aws-evidence-caption" in styles
+    assert 'base = "dark"' in config
+    assert 'textColor = "#f4f8fb"' in config
 
 
 def test_invalid_timestamp_renders_safely() -> None:

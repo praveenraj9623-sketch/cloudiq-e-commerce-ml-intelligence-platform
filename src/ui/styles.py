@@ -14,11 +14,18 @@ def apply_glass_theme() -> None:
         <style>
         :root {
           --cloudiq-bg: #071014;
-          --cloudiq-panel: rgba(255,255,255,0.082);
-          --cloudiq-panel-strong: rgba(255,255,255,0.13);
+          --cloudiq-text-primary: #f4f8fb;
+          --cloudiq-text-muted: #c7d4dc;
+          --cloudiq-surface-bg: rgba(255,255,255,0.082);
           --cloudiq-border: rgba(255,255,255,0.18);
-          --cloudiq-text: #f4f8fb;
-          --cloudiq-muted: #aebbc4;
+          --cloudiq-control-bg-selected: rgba(123,211,255,0.18);
+          --cloudiq-control-text-selected: #f7fbff;
+          --cloudiq-dropdown-bg: #0d1a22;
+          --cloudiq-dropdown-option-text: #f4f8fb;
+          --cloudiq-panel: var(--cloudiq-surface-bg);
+          --cloudiq-panel-strong: rgba(255,255,255,0.13);
+          --cloudiq-text: var(--cloudiq-text-primary);
+          --cloudiq-muted: var(--cloudiq-text-muted);
           --cloudiq-blue: #7bd3ff;
           --cloudiq-green: #96f2c2;
           --cloudiq-amber: #ffd38a;
@@ -66,10 +73,12 @@ def apply_glass_theme() -> None:
         }
 
         .cloudiq-hero h1 {
+          color: var(--cloudiq-text-primary) !important;
           margin: 0;
           letter-spacing: 0;
           font-size: clamp(2rem, 3.2vw, 3.7rem);
           line-height: 1.05;
+          text-shadow: 0 2px 22px rgba(0,0,0,0.38);
         }
 
         .cloudiq-hero.compact h1 {
@@ -77,7 +86,7 @@ def apply_glass_theme() -> None:
         }
 
         .cloudiq-subtitle {
-          color: var(--cloudiq-muted);
+          color: var(--cloudiq-text-muted) !important;
           margin-top: 0.55rem;
           font-size: 1rem;
         }
@@ -103,7 +112,7 @@ def apply_glass_theme() -> None:
         }
 
         .metric-label {
-          color: var(--cloudiq-muted);
+          color: var(--cloudiq-text-muted);
           font-size: 0.82rem;
           text-transform: uppercase;
           letter-spacing: 0;
@@ -111,14 +120,14 @@ def apply_glass_theme() -> None:
         }
 
         .metric-value {
-          color: var(--cloudiq-text);
+          color: var(--cloudiq-text-primary);
           font-size: 1.75rem;
           font-weight: 700;
           line-height: 1.16;
         }
 
         .metric-caption {
-          color: var(--cloudiq-muted);
+          color: var(--cloudiq-text-muted);
           font-size: 0.85rem;
           margin-top: 0.45rem;
         }
@@ -137,6 +146,7 @@ def apply_glass_theme() -> None:
         }
 
         .section-title {
+          color: var(--cloudiq-text-primary);
           margin: 1.4rem 0 0.35rem;
           font-size: 1.25rem;
           line-height: 1.2;
@@ -145,7 +155,7 @@ def apply_glass_theme() -> None:
 
         .section-caption {
           margin: 0 0 0.9rem;
-          color: var(--cloudiq-muted);
+          color: var(--cloudiq-text-muted);
           font-size: 0.93rem;
         }
 
@@ -158,6 +168,24 @@ def apply_glass_theme() -> None:
           border-top: 1px solid rgba(255,255,255,0.10);
           border-right: 1px solid rgba(255,255,255,0.10);
           border-bottom: 1px solid rgba(255,255,255,0.10);
+        }
+
+        div[data-testid="stCaptionContainer"],
+        div[data-testid="stCaptionContainer"] p {
+          color: var(--cloudiq-text-muted) !important;
+        }
+
+        .aws-generated-at,
+        .aws-evidence-caption {
+          color: #dceaf2;
+          font-size: 0.9rem;
+          line-height: 1.45;
+          margin: 0.35rem 0;
+        }
+
+        .aws-generated-at {
+          color: var(--cloudiq-text-primary);
+          font-weight: 650;
         }
 
         div[data-testid="stDataFrame"] {
@@ -184,9 +212,59 @@ def apply_glass_theme() -> None:
           background-color: var(--cloudiq-blue);
         }
 
-        div[data-baseweb="select"] > div {
-          background: rgba(255,255,255,0.08);
-          border-color: rgba(123,211,255,0.24);
+        div[data-testid="stSelectbox"] label,
+        div[data-testid="stSelectbox"] label p {
+          color: var(--cloudiq-text-primary) !important;
+          font-weight: 650;
+        }
+
+        div[data-testid="stSelectbox"] [data-baseweb="select"] > div {
+          background: var(--cloudiq-control-bg-selected) !important;
+          border-color: rgba(123,211,255,0.45) !important;
+          color: var(--cloudiq-control-text-selected) !important;
+          box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+        }
+
+        div[data-testid="stSelectbox"] [data-baseweb="select"] span,
+        div[data-testid="stSelectbox"] [data-baseweb="select"] div,
+        div[data-testid="stSelectbox"] [data-baseweb="select"] input {
+          color: var(--cloudiq-control-text-selected) !important;
+          -webkit-text-fill-color: var(--cloudiq-control-text-selected) !important;
+        }
+
+        div[data-testid="stSelectbox"] [data-baseweb="select"] svg {
+          color: var(--cloudiq-control-text-selected) !important;
+          fill: var(--cloudiq-control-text-selected) !important;
+        }
+
+        div[data-testid="stSelectbox"] [data-baseweb="select"] input::placeholder {
+          color: var(--cloudiq-text-muted) !important;
+          opacity: 1 !important;
+        }
+
+        div[data-baseweb="popover"] [role="listbox"],
+        div[data-baseweb="popover"] [data-baseweb="menu"],
+        [role="listbox"] {
+          background: var(--cloudiq-dropdown-bg) !important;
+          border: 1px solid var(--cloudiq-border) !important;
+          color: var(--cloudiq-dropdown-option-text) !important;
+        }
+
+        [role="option"],
+        [role="option"] div,
+        [role="option"] span {
+          background: var(--cloudiq-dropdown-bg) !important;
+          color: var(--cloudiq-dropdown-option-text) !important;
+        }
+
+        [role="option"]:hover,
+        [role="option"]:hover div,
+        [role="option"]:hover span,
+        [role="option"][aria-selected="true"],
+        [role="option"][aria-selected="true"] div,
+        [role="option"][aria-selected="true"] span {
+          background: rgba(123,211,255,0.22) !important;
+          color: var(--cloudiq-control-text-selected) !important;
         }
         </style>
         """,

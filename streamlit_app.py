@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -576,8 +577,16 @@ def quality_page() -> None:
     with s3_cols[3]:
         metric_card("Validation Mode", str(s3_status["validation_mode"]), "No live S3 reads")
     if s3_status["generated_at_display"]:
-        st.caption(f"Manifest generated: {s3_status['generated_at_display']}")
-    st.caption(AWS_S3_EXPLANATORY_CAPTION)
+        st.markdown(
+            '<div class="aws-generated-at">'
+            f"Manifest generated: {escape(str(s3_status['generated_at_display']))}"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    st.markdown(
+        f'<div class="aws-evidence-caption">{escape(AWS_S3_EXPLANATORY_CAPTION)}</div>',
+        unsafe_allow_html=True,
+    )
     with st.expander("Manifest Details", expanded=False):
         if s3_status["generated_at_display"]:
             st.caption(f"Generated timestamp: {s3_status['generated_at_display']}")
