@@ -10,7 +10,7 @@ The current bucket is:
 
 - Bucket: `marketplace-lakehouse-demo-9623`
 - Region: `ap-south-1`
-- Suggested raw prefix: `raw/olist/`
+- Raw prefix: `raw/`
 
 ## Local Verification
 
@@ -18,19 +18,39 @@ Store real AWS credentials only in your local `.env` file, shell environment,
 AWS CLI profile, or another boto3-supported local credential provider. Do not
 commit credentials.
 
+Preview the local raw CSV sync plan without uploading:
+
+```powershell
+python aws/sync_raw_to_s3.py --dry-run
+```
+
+Publish only the generated manifest to prove `s3:PutObject` access without
+overwriting source data:
+
+```powershell
+python aws/sync_raw_to_s3.py --publish-manifest
+```
+
 Run the read-only verifier:
 
 ```powershell
 python aws/verify_s3.py
 ```
 
-The script requires:
+The scripts require:
 
 - `AWS_S3_BUCKET`
 - `AWS_DEFAULT_REGION`
 
-The script uses boto3 default credential resolution and calls only
+`AWS_S3_PREFIX` should be `raw/`. The existing S3 layout is flat, with keys such
+as `raw/olist_customers_dataset.csv`; do not create a second `raw/olist/`
+prefix.
+
+The verifier uses boto3 default credential resolution and calls only
 `list_objects_v2`. It does not upload, delete, rename, or mutate S3 objects.
+The sync utility uploads only missing source CSVs by default, never deletes
+remote objects, and never overwrites source CSV objects unless `--overwrite` is
+explicitly supplied.
 
 ## Current Integration Boundary
 

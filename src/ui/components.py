@@ -6,6 +6,10 @@ from html import escape
 
 import streamlit as st
 
+PRODUCT_TRANSLATION_FALLBACK_NOTE = (
+    "13 product rows across 2 categories retained using untranslated__ fallback labels."
+)
+
 
 def glass_card(body: str, extra_class: str = "") -> None:
     """Render a frosted glass card with trusted, preformatted HTML body."""
@@ -85,3 +89,12 @@ def late_delivery_rate_definition() -> str:
         "Late-delivery rate = delivered orders received after the estimated delivery "
         "date divided by all delivered orders with valid actual and estimated delivery dates."
     )
+
+
+def methodology_notes_without_duplicate_fallback(notes: list[str]) -> list[str]:
+    """Return methodology notes without duplicating the fixed fallback note."""
+    return [
+        str(note)
+        for note in notes
+        if str(note).strip() != PRODUCT_TRANSLATION_FALLBACK_NOTE
+    ]

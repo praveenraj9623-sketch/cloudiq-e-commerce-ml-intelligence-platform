@@ -33,5 +33,6 @@ __pycache__/
 .venv/
 spark-warehouse/
 logs/
-reports/
+reports/*
+!reports/olist_source_manifest.json
 *.log

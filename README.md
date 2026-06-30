@@ -106,6 +106,17 @@ verification demo for the existing bucket `marketplace-lakehouse-demo-9623` in
 medallion demonstration; this repository does not claim live AWS-Databricks
 connectivity.
 
+Optional S3 commands:
+
+```powershell
+python aws/sync_raw_to_s3.py --dry-run
+python aws/sync_raw_to_s3.py --publish-manifest
+python aws/verify_s3.py
+```
+
+- The Streamlit deployment renders versioned local S3 manifest evidence and
+  does not perform live cloud-storage reads.
+
 Validated a Databricks Free Edition medallion pipeline with Unity Catalog
 managed tables and implemented a least-privilege AWS S3 storage integration
 separately for raw-data verification.

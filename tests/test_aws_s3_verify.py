@@ -66,8 +66,8 @@ def test_verify_s3_access_returns_safe_object_summary() -> None:
         {
             "KeyCount": 2,
             "Contents": [
-                {"Key": "raw/olist/orders.csv", "Size": 123},
-                {"Key": "raw/olist/items.csv", "Size": 456},
+                {"Key": "raw/olist_orders_dataset.csv", "Size": 123},
+                {"Key": "raw/olist_order_items_dataset.csv", "Size": 456},
             ],
         }
     )
@@ -79,7 +79,7 @@ def test_verify_s3_access_returns_safe_object_summary() -> None:
 
     assert client.called_bucket == "marketplace-lakehouse-demo-9623"
     assert result.object_count == 2
-    assert result.objects[0].key == "raw/olist/orders.csv"
+    assert result.objects[0].key == "raw/olist_orders_dataset.csv"
     assert result.objects[1].size == 456
 
 

@@ -12,9 +12,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.ui import (
+    PRODUCT_TRANSLATION_FALLBACK_NOTE,
     apply_glass_theme,
     glass_card,
     info_callout,
+    methodology_notes_without_duplicate_fallback,
     metric_card,
     payment_method_label,
     plotly_glass_layout,
@@ -22,6 +24,10 @@ from src.ui import (
     section_header,
     seller_monetary_label,
     status_badge,
+)
+from src.ui.aws_s3_status import (
+    AWS_S3_EXPLANATORY_CAPTION,
+    load_s3_manifest_status,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -47,6 +53,12 @@ def read_csv(name: str) -> pd.DataFrame:
 def read_json(name: str) -> dict[str, Any]:
     """Read a dashboard JSON mart."""
     return json.loads((DASHBOARD_DIR / name).read_text(encoding="utf-8"))
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def read_aws_s3_manifest_status() -> dict[str, Any]:
+    """Read local S3 manifest evidence for dashboard display."""
+    return load_s3_manifest_status().to_dict()
 
 
 def money(value: float | int | None) -> str:
@@ -541,12 +553,44 @@ def quality_page() -> None:
             st.dataframe(frame, use_container_width=True, hide_index=True)
 
     section_header("Methodology Notes")
-    for note in quality.get("methodology_notes", []):
+    for note in methodology_notes_without_duplicate_fallback(
+        quality.get("methodology_notes", [])
+    ):
         info_callout(note)
 
-    glass_card(
-        "13 product rows across 2 categories retained using untranslated__ fallback labels."
-    )
+    glass_card(PRODUCT_TRANSLATION_FALLBACK_NOTE)
+
+    s3_status = read_aws_s3_manifest_status()
+    section_header("AWS S3 Raw Landing Zone")
+    s3_cols = st.columns(4)
+    with s3_cols[0]:
+        metric_card("Storage Layer", str(s3_status["storage_layer"]), "Optional object storage")
+    with s3_cols[1]:
+        metric_card(
+            "Source Files Verified",
+            str(s3_status["source_files_verified"]),
+            "Expected 9",
+        )
+    with s3_cols[2]:
+        metric_card("Manifest Status", str(s3_status["manifest_status"]), "Local evidence")
+    with s3_cols[3]:
+        metric_card("Validation Mode", str(s3_status["validation_mode"]), "No live S3 reads")
+    if s3_status["generated_at_display"]:
+        st.caption(f"Manifest generated: {s3_status['generated_at_display']}")
+    st.caption(AWS_S3_EXPLANATORY_CAPTION)
+    with st.expander("Manifest Details", expanded=False):
+        if s3_status["generated_at_display"]:
+            st.caption(f"Generated timestamp: {s3_status['generated_at_display']}")
+        if s3_status["files"]:
+            st.dataframe(
+                pd.DataFrame(s3_status["files"]),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            info_callout(str(s3_status["error_message"] or "Not verified locally yet."))
+            st.code(str(s3_status["remediation_command"]))
+
     section_header("Metric Definitions")
     for name, definition in metric_definitions.items():
         info_callout(f"{name}: {definition}")
