@@ -1,0 +1,108 @@
+{
+  "source_audit": {
+    "executive_verdict": "READY WITH WARNINGS",
+    "safe_to_run_bronze": "YES",
+    "bronze_reconciliation": "9/9 source tables matched audited raw counts",
+    "warnings": [
+      "olist_geolocation_dataset.csv has 261831 exact duplicate rows.",
+      "Informational: geolocation has 981148 duplicate zip-code rows; this is not a Bronze ingestion failure.",
+      "Optional lookup warning: 13 product rows across 2 distinct product_category_name values have no English translation."
+    ],
+    "translation_lookup_gap": {
+      "unmatched_product_row_count": 13,
+      "unmatched_distinct_category_count": 2,
+      "unmatched_categories": [
+        "pc_gamer",
+        "portateis_cozinha_e_preparadores_de_alimentos"
+      ]
+    },
+    "raw_file_row_counts": {
+      "customers": 99441,
+      "geolocation": 1000163,
+      "order_items": 112650,
+      "payments": 103886,
+      "reviews": 99224,
+      "orders": 99441,
+      "products": 32951,
+      "sellers": 3095,
+      "category_translation": 71
+    }
+  },
+  "pipeline_validation": {
+    "status": "validated local Bronze/Silver/Gold outputs",
+    "bronze_row_counts": {
+      "customers": 99441,
+      "geolocation": 1000163,
+      "order_items": 112650,
+      "payments": 103886,
+      "reviews": 99224,
+      "orders": 99441,
+      "products": 32951,
+      "sellers": 3095,
+      "category_translation": 71
+    },
+    "silver_row_counts": {
+      "orders": 99441,
+      "order_items": 112650,
+      "master_orders": 99441,
+      "customer_profile": 96096,
+      "product_demand": 1273,
+      "seller_performance": 3095
+    },
+    "gold_row_counts": {
+      "demand_features": 980,
+      "churn_features": 453617,
+      "rfm_segments": 96096,
+      "bi_revenue": 1648
+    }
+  },
+  "period_quality": {
+    "minimum_comparable_order_count": 100,
+    "minimum_delivered_orders_for_late_rate": 100,
+    "excluded_business_trend_periods": [
+      {
+        "order_year_month": "2016-09",
+        "order_count": 4,
+        "is_partial_period": true,
+        "is_low_volume_period": true
+      },
+      {
+        "order_year_month": "2016-12",
+        "order_count": 1,
+        "is_partial_period": false,
+        "is_low_volume_period": true
+      },
+      {
+        "order_year_month": "2018-09",
+        "order_count": 16,
+        "is_partial_period": false,
+        "is_low_volume_period": true
+      },
+      {
+        "order_year_month": "2018-10",
+        "order_count": 4,
+        "is_partial_period": true,
+        "is_low_volume_period": true
+      }
+    ]
+  },
+  "metric_definitions": {
+    "Item Merchandise Value (excludes freight)": "Sum of order item price values; freight is excluded.",
+    "Average Item Merchandise Value per Order": "Item Merchandise Value excluding freight divided by distinct orders.",
+    "Seller-Attributed Order Value (item + freight)": "Seller-level item price plus seller-level freight value.",
+    "Orders by Primary Payment Type": "One deterministic payment type per order, selected by highest payment value, then lowest payment sequence, then payment type alphabetically.",
+    "Late-delivery rate": "Late-delivery rate = delivered orders received after the estimated delivery date divided by all delivered orders with valid actual and estimated delivery dates."
+  },
+  "source_characteristics": {
+    "geolocation_note": "Geolocation contains repeated zip-code observations and is not used in the current business marts.",
+    "geolocation_duplicate_zip_code_rows": 981148,
+    "geolocation_exact_duplicate_rows": 261831
+  },
+  "demand_feature_rows": 980,
+  "methodology_notes": [
+    "Reviews Bronze ingestion uses multiline-safe CSV parsing.",
+    "13 product rows across 2 categories are retained using untranslated__ fallback labels.",
+    "Demand features predict target_units for forecast_month using only information available before that month starts.",
+    "Churn classification is not trained because snapshot inactivity is 99.25%."
+  ]
+}

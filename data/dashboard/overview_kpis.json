@@ -1,0 +1,13 @@
+{
+  "total_orders": 99441,
+  "item_merchandise_value_ex_freight": 13591643.700000001,
+  "item_revenue_ex_freight": 13591643.700000001,
+  "freight_value": 2251909.5399999996,
+  "avg_item_merchandise_value_per_order": 136.68048088816485,
+  "avg_item_revenue_per_order": 136.68048088816485,
+  "late_delivery_rate": 0.08112366538820359,
+  "first_order_month": "2016-09",
+  "last_order_month": "2018-10",
+  "revenue_definition": "Item Merchandise Value excludes freight; seller-attributed order value includes item + freight.",
+  "data_scope": "Historical Olist marketplace orders, 2016-2018"
+}

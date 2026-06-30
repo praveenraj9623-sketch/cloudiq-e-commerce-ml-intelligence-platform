@@ -1,0 +1,19 @@
+{
+  "files": {
+    "overview_kpis.json": 1,
+    "demand_backtest_input.csv": 980,
+    "monthly_revenue.csv": 25,
+    "state_revenue.csv": 27,
+    "payment_mix.csv": 6,
+    "delivery_performance.csv": 25,
+    "rfm_segment_distribution.csv": 5,
+    "rfm_segment_profiles.csv": 5,
+    "seller_performance.csv": 3095,
+    "demand_backtest_predictions.csv": 388,
+    "demand_backtest_monthly_aggregate.csv": 6,
+    "demand_backtest_category_errors.csv": 71,
+    "demand_backtest_fold_metrics.csv": 12,
+    "demand_model_metrics.json": 1,
+    "data_quality_summary.json": 1
+  }
+}

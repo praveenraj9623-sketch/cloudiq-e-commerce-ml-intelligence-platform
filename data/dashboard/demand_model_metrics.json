@@ -1,0 +1,95 @@
+{
+  "champion_model": "naive_lag_1",
+  "champion_display_name": "Naive Lag-1 Benchmark",
+  "champion_reason": "Naive lag-1 benchmark retained because XGBoost did not improve the pooled chronological WAPE/MAE selection criterion.",
+  "selection_basis": "pooled out-of-fold validation prioritized by WAPE and MAE, with RMSE secondary",
+  "forecast_contract": {
+    "forecast_month": "month being predicted",
+    "target_units": "observed units in forecast_month",
+    "feature_availability_cutoff": "end of prior month",
+    "lag_1": "observed units in forecast_month - 1",
+    "lag_2": "observed units in forecast_month - 2",
+    "lag_4": "observed units in forecast_month - 4",
+    "rolling_mean_3": "mean observed units from forecast_month - 3 through forecast_month - 1",
+    "naive_baseline": "prediction equals lag_1"
+  },
+  "metrics": {
+    "naive_lag_1": {
+      "mae": 19.262886597938145,
+      "rmse": 37.06917467843338,
+      "wape": 16.710264493482686,
+      "smape": 32.57181557206166,
+      "mape": 38.581266923919046,
+      "r2": 0.958780336767284
+    },
+    "xgboost": {
+      "mae": 25.31287108991564,
+      "rmse": 47.94909929585941,
+      "wape": 21.958535074758576,
+      "smape": 40.94689348416314,
+      "mape": 80.49497197576343,
+      "r2": 0.9310332893955727
+    }
+  },
+  "validation": {
+    "forecast_months": [
+      "2018-03",
+      "2018-04",
+      "2018-05",
+      "2018-06",
+      "2018-07",
+      "2018-08"
+    ],
+    "date_range": {
+      "start": "2018-03",
+      "end": "2018-08"
+    },
+    "row_count": 388,
+    "fold_count": 6
+  },
+  "training": {
+    "row_count": 980,
+    "all_input_rows": 980,
+    "feature_columns": [
+      "lag_1",
+      "lag_2",
+      "lag_4",
+      "rolling_mean_3",
+      "month_num",
+      "is_q4"
+    ],
+    "target_column": "target_units",
+    "source_file": "data/dashboard/demand_backtest_input.csv",
+    "xgboost_params": {
+      "n_estimators": 120,
+      "max_depth": 3,
+      "learning_rate": 0.05,
+      "subsample": 0.8,
+      "colsample_bytree": 0.8,
+      "objective": "reg:squarederror",
+      "random_state": 42,
+      "n_jobs": 1
+    }
+  },
+  "metric_definitions": {
+    "mae": "Mean absolute category-month unit error.",
+    "rmse": "Root mean squared category-month unit error.",
+    "wape": "Sum absolute error divided by sum actual units.",
+    "smape": "Zero-safe symmetric absolute percentage error.",
+    "mape": "Zero-safe category-month MAPE; diagnostic only for low-volume data.",
+    "r2": "Secondary diagnostic only."
+  },
+  "old_chart_crossing_explanation": "The old crossing chart used ambiguous target-month naming and a fallback validation artifact. The corrected chart aggregates the exact out-of-fold rows by forecast_month; the naive line naturally trails changes because it equals lag_1.",
+  "churn_limitation": "Churn classification was intentionally not trained because the snapshot churn table has a 99.25% inactivity rate, making it unsuitable as a flagship supervised classifier for this dataset.",
+  "saved_files": {
+    "model": "models\\cloudiq_demand_forecast.joblib",
+    "predictions": "reports\\demand_backtest_predictions.csv",
+    "fold_metrics": "reports\\demand_backtest_fold_metrics.csv",
+    "monthly_aggregate": "reports\\demand_backtest_monthly_aggregate.csv",
+    "category_errors": "reports\\demand_backtest_category_errors.csv",
+    "metrics": "reports\\demand_forecast_metrics.json",
+    "chart": "reports\\demand_forecast_validation.png",
+    "model_card": "reports\\demand_forecast_model_card.md",
+    "modeling_notes": "reports\\modeling_notes.md"
+  }
+}
