@@ -17,6 +17,14 @@ models/
 .env
 .streamlit/secrets.toml
 kaggle.json
+*credentials*.csv
+*accessKeys*.csv
+aws_credentials.env
+aws_credentials.ps1
+aws_credentials.sh
+aws_session.env
+set_aws_credentials.*
+.aws/
 
 # Python, Spark and logs
 __pycache__/

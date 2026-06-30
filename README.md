@@ -98,6 +98,22 @@ The dashboard reads only local CSV/JSON marts from `data/dashboard/`, so Spark
 does not start on every page refresh. It is explicitly historical Olist
 marketplace data from 2016-2018, not live production data.
 
+## AWS + Databricks Architecture Note
+
+AWS S3 support is implemented as a separate optional object-storage
+verification demo for the existing bucket `marketplace-lakehouse-demo-9623` in
+`ap-south-1`. Databricks Free Edition remains a separate managed-table
+medallion demonstration; this repository does not claim live AWS-Databricks
+connectivity.
+
+Validated a Databricks Free Edition medallion pipeline with Unity Catalog
+managed tables and implemented a least-privilege AWS S3 storage integration
+separately for raw-data verification.
+
+Production architecture, designed but not provisioned in this free-tier
+project: S3 raw zone -> IAM role -> Databricks storage credential -> Unity
+Catalog external location -> Bronze/Silver/Gold Delta tables.
+
 Demand forecasting is shown as an expanding-window rolling backtest.
 `forecast_month` is the month being predicted, `target_units` is the observed
 unit demand in that month, and every lag feature is known before the forecast
