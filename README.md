@@ -145,8 +145,13 @@ Dashboard metric definitions:
 - Late-delivery rate = delivered orders received after the estimated delivery
   date divided by all delivered orders with valid actual and estimated delivery
   dates.
-- RFM segments are relative historical tiers; repeat purchasing is limited, so
-  labels do not prove loyalty or churn risk.
+- RFM segments are relative historical tiers, not churn predictions; repeat
+  purchasing is limited, so labels do not prove loyalty or churn risk.
+- Local Gold / Streamlit RFM output is the canonical portfolio output.
+  Databricks validates the same 96,096-customer population, unique customer
+  assignment, no null segments, and
+  `rfm_logic_version = local_gold_canonical_v1`; segment counts can differ
+  slightly at `ntile` tie boundaries due to engine ordering.
 - Churn classification is intentionally not trained because the snapshot target
   has 99.25% inactivity.
 
@@ -170,7 +175,10 @@ Dashboard metric definitions:
   from `order_items`; review and late-rate metrics use a distinct
   `seller_id` + `order_id` mapping (C3, C4).
 - **`segment_label`** from `gold/rfm_segments` is the canonical segmentation
-  output; no KMeans output is produced in the Gold phase (C5, C14).
+  output; Databricks RFM is separately validated with the same logic version,
+  while exact segment-count parity is not claimed because tied RFM values may
+  cross adjacent quintile boundaries by engine ordering. No KMeans output is
+  produced in the Gold phase (C5, C14).
 - **Config validation** is local-first: `validate(strict=False)` warns on
   unresolved optional placeholders; `validate(strict=True)` raises (C7).
 - **Spark** uses `local[*]` with `configure_spark_with_delta_pip`; no session
